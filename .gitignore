@@ -1,0 +1,11 @@
+build/
+data/*.csv
+*.o
+*.a
+*.so
+*.dylib
+compile_commands.json
+.cache/
+CMakeCache.txt
+cmake_install.cmake
+CMakeFiles/
