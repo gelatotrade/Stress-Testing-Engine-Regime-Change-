@@ -4,294 +4,141 @@ A high-performance C++ engine for stress testing options portfolio strategies wi
 
 ---
 
-## 3D P&L Surface -- Regime Change Visualization Over Time
+## Live 3D Regime Change Visualization
 
-The engine renders a **live 3D coordinate system** where the P&L surface morphs in real-time as market regimes shift. Below you can see how the surface, signals, and risk allocation change across 5 distinct market phases:
+The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Volatility x P&L) that **morphs in real-time** as market regimes shift. The surface color, shape, and orientation change as the Hidden Markov Model detects regime transitions -- from smooth green domes in bull markets to inverted red craters during crashes.
 
----
+### P&L Surface Morphing Through Market Regimes
 
-### Phase 1: Bull Quiet -- Steady Growth (VIX ~12, S&P +15% YoY)
+> The 3D surface rotates and deforms live as the engine cycles through: **Bull Quiet** (green) --> **Transition** (yellow/orange) --> **Bear Volatile / Crisis** (red) --> **Recovery** (blue) --> **New Bull** (green)
 
-```
-  Signal: STRONG BUY                Regime: Bull Quiet
-  Cash: 15% | Equity: 60% | Options: 25%     Confidence: 87%
+![3D P&L Surface - Regime Cycle Animation](docs/img/regime_cycle_3d.gif)
 
-  P&L ($)
-   ^
-   |                                          Strategy: Covered Call +
-   |                    .::::::::::.           Iron Condor
-   |                .:::::::::::::::::::.
-   |            .:::::::::::::::::::::::::::   Smooth green surface =
-   |         .:::::::::::::::::::::::::::::.   stable premium income
-   |       ::::::::::::::::::::::::::::::::
-   |     .::::::::::::::::::::::::::::::::'    Max Profit Zone
-   |    :::::::::::::::::::::::::::::::::'       ~~~~~~~~~~~~
-   |   ::::::::::::::::::::::::::::::::'
-   |  ::::::::::::::::::::::::::::::::'            VIX: 12.3
-   | .:::::::::::::::::::::::::::::::'          Sharpe: 1.85
-   |::::::::::::::::::::::::::::::::'        Max Draw: -3.2%
-   +------------------------------+-------> Spot Price ($)
-   |   4000   4200   4400   4600  |  4800
-   |                              |
-   v                              v
-  Vol (IV)                    Time Decay
-  0.10 ........................ T+30d        Early Warning: [====------] 18%
-  0.15 ........................ T+20d        Crisis Prob:   [==---------] 5%
-  0.20 ........................ T+10d
-  0.25 ........................ T+0d         Portfolio vs S&P500: +3.2% Alpha
+**What you're seeing:**
+- **X-Axis**: Spot Price ($) -- the underlying S&P 500 level
+- **Y-Axis**: Implied Volatility (%) -- option-implied expected volatility
+- **Z-Axis**: P&L ($) -- portfolio profit/loss from Iron Condor strategy
+- **Color**: Green = profit zone, Red = loss zone, shifting with regime
+- **Bottom bar**: Regime timeline progressing through the full cycle
+- **Header**: Current regime, trading signal, and VIX level updating live
 
-  Regime Timeline:
-  [========BULL QUIET=========>                                          ]
-  Day 1                       Day 120                              Day 756
-```
+| Phase | Surface Shape | VIX | Signal | Cash Allocation |
+|-------|--------------|-----|--------|-----------------|
+| Bull Quiet | Smooth elevated dome | ~12 | STRONG BUY | 15% |
+| Transition | Rippling, tilting surface | ~24 | REDUCE RISK | 40% |
+| Bear Volatile | Inverted crater, deep valleys | ~67 | CRISIS | 70% |
+| Recovery | Reforming upward slope | ~28 | BUY | 25% |
+| New Bull | Smooth dome returns | ~14 | STRONG BUY | 15% |
 
 ---
 
-### Phase 2: Transition -- Early Warning Signals (VIX Rising, Yield Curve Inverting)
+### Early Warning Dashboard
 
-```
-  Signal: REDUCE RISK               Regime: TRANSITION
-  Cash: 40% | Equity: 40% | Options: 20%     Confidence: 52%
+The multi-panel dashboard tracks crisis probability, VIX trajectory, portfolio allocation shifts, and cumulative returns vs. S&P 500 benchmark in real-time. Watch how the system **detects the incoming crash early** and shifts to cash before the drawdown hits.
 
-  P&L ($)
-   ^
-   |         WARNING: Regime shift detected!
-   |                                  .
-   |                 .:::::::.      .' '.
-   |              .::::::::::::.  .'     '.    Surface becomes UNEVEN
-   |           .::::::::::::::::.'   /\    '.  Peaks and valleys appear
-   |         :::::::::::::::::.    /    \
-   |       .:::::::::::::::.'    /  !!  \      Vol-of-Vol SPIKING
-   |      :::::::::::::::.'    /   !!!!  \
-   |    .:::::::::::::::.'---'    !!!!!!   \     VIX: 22.7 (+84%)
-   |   ::::::::::::::.'          !!!!!!!!    \   Credit Spreads: +45%
-   |  ::::::::::::..'          !!!!!!!!!!     \  Yield Curve: INVERTING
-   | :::::::::::.'           !!!!!!!!!!!!      \
-   +------------------------------+-------> Spot Price ($)
-   |   4000   4200   4400   4600  |  4800
-   |                              |
-   v                              v
-  Vol (IV)                    Time Decay
-  0.15 ......./\/\............. T+30d        Early Warning: [=========-] 62%
-  0.22 ....../    \/\.......... T+20d        Crisis Prob:   [======----] 28%
-  0.30 ...../       \.......... T+10d
-  0.38 ..../         \......... T+0d         Portfolio vs S&P500: +1.8% Alpha
+![Early Warning Dashboard Animation](docs/img/early_warning_dashboard.gif)
 
-  Regime Timeline:                     v-- WE ARE HERE
-  [========BULL QUIET========][==TRANSITION===>                          ]
-  Day 1                    Day 120    Day 185                      Day 756
-
-  ACTIONS TAKEN:
-  + Closed Iron Condors (high gamma risk)
-  + Added Protective Puts (downside hedge)
-  + Increased cash allocation 25% -> 40%
-  + Added Long Straddles (play vol expansion)
-```
+**Panels:**
+- **Top-Left**: Crisis probability gauge -- rises from 5% to 89% as crash approaches
+- **Top-Right**: VIX trajectory -- climbing from 12 past the danger threshold to 67
+- **Bottom-Left**: Portfolio allocation bars -- cash increasing, equity decreasing as risk rises
+- **Bottom-Right**: Cumulative returns -- portfolio (green) avoids the crash vs. S&P 500 (red)
 
 ---
 
-### Phase 3: Bear Volatile -- MARKET CRASH (VIX >45, S&P -30%)
+### Stress Test P&L Surface
 
-```
-  Signal: CRISIS                    Regime: BEAR VOLATILE
-  Cash: 70% | Equity: 20% | Options: 10%     Confidence: 94%
+The stress test engine sweeps across **Spot Shocks** (-50% to +20%) and **Volatility Shocks** (0% to +50%) simultaneously, computing portfolio P&L at every combination. Historical crisis scenarios (GFC 2008, COVID 2020, etc.) are marked as labeled points on the surface.
 
-  P&L ($)
-   ^
-   |  !!!! CRISIS MODE ACTIVE !!!!
-   |
-   |  '.                                       HEDGED Portfolio P&L
-   |    ''.                                    (with Protective Puts)
-   |      ''..         Protective Puts
-   |         ''..      SAVING the portfolio     Unhedged would be: -34%
-   |            ''...        |                  Hedged actual:      -8%
-   |               '''..     v
-   |                   ''''......               VIX: 67.2
-   |  - - - - - - - - - - - -''''....           S&P: -34% from peak
-   |----BREAKEVEN-LINE-----------''''...        Credit Spreads: +280%
-   |                                  ''''.     Yield Curve: -0.8%
-   |                                      '.
-   |'.                                      '. Unhedged S&P
-   |  '..                                  ..' (what you AVOIDED)
-   |     '''...                        ..'''
-   |          '''''..............'''''''''
-   |               LOSS ZONE (avoided)
-   +------------------------------+-------> Spot Price ($)
-   |   3100   3400   3700   4000  |  4300
-   |                              |
-   v                              v
-  Vol (IV)                    Time Decay
-  0.35 ...../\/\/\/\/\......... T+30d        Early Warning: [==========] 95%
-  0.50 ..../          \........ T+20d        Crisis Prob:   [==========] 89%
-  0.65 .../            \....... T+10d
-  0.80 ../              \...... T+0d         Portfolio vs S&P500: +26% Alpha
+![Stress Test Surface Animation](docs/img/stress_test_surface.gif)
 
-  Regime Timeline:                                v-- WE ARE HERE
-  [===BULL QUIET===][==TRANS==][=====BEAR VOLATILE======>                ]
-  Day 1          Day 120   Day 185    Day 230   Day 280            Day 756
-
-  CRASH ANATOMY (3D Surface Deformation Over Time):
-
-     Day 185 (Pre-Crash)        Day 210 (Crash Start)       Day 250 (Peak Crisis)
-     Surface: Flat/Green        Surface: Tilting/Yellow      Surface: Inverted/Red
-
-        ___________                 _____                         __
-       /          /|              /     /\                       /  \
-      /  STABLE  / |             / ~~~ /  \                     / !! \
-     /          /  |            / ~~~ / !! \                   / !!!! \
-    /_________ /   |           /_____/ !!!! \                 / !!!!!! \
-    |         |    /           |     | !!!!!/           _____/ !!!!!!!! \_____
-    |  +$$$   |   /            | +/- | !!!/           |     LOSS ZONE      |
-    |         |  /             |     | !!/            |    $$$$ LOSS $$$$   |
-    |_________|/               |_____|!/              |____________________|
-
-    VIX: 15    P&L: +$45K     VIX: 35   P&L: -$12K    VIX: 67   P&L: -$82K
-    Signal: BUY               Signal: GO TO CASH       Signal: CRISIS
-    Cash: 15%                 Cash: 55%                Cash: 70%
-```
+**Reading the surface:**
+- **Green zone** (upper right): Mild shocks, portfolio holds up
+- **Red zone** (lower left): Severe spot crash + vol spike = maximum loss
+- **Labeled points**: Where historical crises fall on the shock spectrum
+- The surface **rotates** to show the full 3D shape of portfolio risk
 
 ---
 
-### Phase 4: Recovery / Bottom Fishing -- Regime Transitioning Back
+### HMM Regime Transition Matrix
 
-```
-  Signal: BUY                       Regime: TRANSITION -> BULL VOLATILE
-  Cash: 25% | Equity: 50% | Options: 25%     Confidence: 61%
+The Hidden Markov Model's **5x5 transition probability matrix** shows the likelihood of moving between market regimes. The dashed cyan box tracks the current state as it moves through the cycle. Watch the probabilities shift as different regimes become more or less likely.
 
-  P&L ($)
-   ^
-   |                                          Regime shifting back
-   |                      .:::::.             to bullish!
-   |                   .:::::::::::.
-   |                .:::::::::::::::::.        Surface re-forming
-   |             .:::::::::::::::::::::::.     upward slope
-   |           ::::::::::::::::::::::::::::
-   |         .::::::::::::::::::::::::::::::   High IV = Fat Premiums
-   |       ::::::::::::::::::::::::::::::::    for selling strategies
-   |     .:::::::::::::::::::::::::::::::::
-   |    ::::::::::::::::::::::::::::::::::'      VIX: 28.4 (falling)
-   |   :::::::::::::::::::::::::::::::::'     Sharpe: 1.42
-   |  .:::::::::::::::::::::::::::::::'    Max Draw: -8.1% (recovering)
-   | ::::::::::::::::::::::::::::::::'
-   +------------------------------+-------> Spot Price ($)
-   |   3600   3900   4200   4500  |  4800
-   |                              |
-   v                              v
-  Vol (IV)                    Time Decay
-  0.20 ...\                     T+30d        Early Warning: [===-------] 22%
-  0.28 ....\.........           T+20d        Crisis Prob:   [==--------] 11%
-  0.35 .....\........           T+10d
-  0.42 ......\                  T+0d         Portfolio vs S&P500: +18% Alpha
+![Regime Transition Heatmap Animation](docs/img/regime_transition_heatmap.gif)
 
-  Regime Timeline:                                           v-- HERE
-  [==BULL Q==][=TRANS=][====BEAR VOL====][======TRANSITION=====>         ]
-  Day 1    Day 120  Day 185          Day 280    Day 350  Day 400   Day 756
-
-  ACTIONS TAKEN:
-  + Re-entering equity positions gradually
-  + Selling puts into elevated IV (high premium)
-  + Adding Bull Call Spreads
-  + Reducing cash 70% -> 25%
-```
+**Reading the matrix:**
+- **Rows** = current state (From), **Columns** = next state (To)
+- **Diagonal** = probability of staying in current regime (self-transition)
+- **Off-diagonal** = probability of regime change
+- **Hot colors** (red/orange) = high probability, **Cool colors** (blue) = low probability
+- **Dashed box** = current active state moving through the cycle
 
 ---
 
-### Phase 5: New Bull -- Outperformance Locked In
+## How the 3D Coordinate System Changes Per Regime
 
 ```
-  Signal: STRONG BUY                Regime: Bull Quiet (New Cycle)
-  Cash: 15% | Equity: 60% | Options: 25%     Confidence: 82%
+  BULL QUIET                    TRANSITION                   BEAR VOLATILE (CRISIS)
+  Surface: Smooth Green         Surface: Rippling Yellow     Surface: Inverted Red
 
-  P&L ($)
-   ^
-   |                                          Full cycle complete!
-   |                      .:::::::::::.
-   |                  .:::::::::::::::::::::.
-   |              .::::::::::::::::::::::::::::::    Smooth green surface
-   |           .::::::::::::::::::::::::::::::::::   returns -- new bull
-   |        .::::::::::::::::::::::::::::::::::::::
-   |      ::::::::::::::::::::::::::::::::::::::::   All-time highs
-   |    .:::::::::::::::::::::::::::::::::::::::::'
-   |   ::::::::::::::::::::::::::::::::::::::::::'     VIX: 13.8
-   |  :::::::::::::::::::::::::::::::::::::::::'     Sharpe: 2.10
-   | .:::::::::::::::::::::::::::::::::::::::'    Max Draw: -8.1%
-   |::::::::::::::::::::::::::::::::::::::::'
-   +------------------------------+-------> Spot Price ($)
-   |   4200   4500   4800   5100  |  5400
-   |                              |
-   v
-  Vol (IV)                                   Early Warning: [==--------] 12%
-  0.10 ........................ T+30d        Crisis Prob:   [=---------]  3%
-  0.15 ........................ T+20d
-                                             Portfolio vs S&P500: +22% Alpha
+       P&L ($)                      P&L ($)                      P&L ($)
+        ^                            ^                            ^
+        |   .:::::::::::.            |      /\    /\              |
+        | .:::::::::::::::::.        |    /    \/    \            |  - - - - breakeven
+        |:::::::::::::::::::::       |  /   ~    ~   \           |
+        |:::::::::::::::::::'        | / ~~  !!!!  ~~ \          |'.
+        |::::::::::::::::::'         |'    !!!!!!!!    \         |  '''...
+        +--------------------> $     +--------------------> $    +---'---------'---> $
+       /                            /                            /
+      v Vol                        v Vol                        v Vol
 
-  Regime Timeline (Complete Cycle):
-  [==BULL Q==][=TR=][===BEAR VOL===][===TRANS===][=====BULL QUIET=====>  ]
-  Day 1    Day 120 Day 185      Day 280      Day 400    Day 500    Day 756
+  VIX: 12    Signal: BUY       VIX: 25   Signal: REDUCE     VIX: 67   Signal: CRISIS
+  Cash: 15%  Alpha: +3%        Cash: 40%  Alpha: +1.8%      Cash: 70%  Alpha: +26%
+  Sharpe: 1.85                 Warning: 62%                  Warning: 95%
 
-  FINAL PERFORMANCE vs BENCHMARK:
 
+  RECOVERY                      NEW BULL
+  Surface: Reforming Blue       Surface: Smooth Green (New Cycle)
+
+       P&L ($)                      P&L ($)
+        ^                            ^
+        |        .:::::.              |                .:::::::::::::.
+        |     .::::::::::::.         |           .::::::::::::::::::::::::.
+        |   :::::::::::::::::.       |        .:::::::::::::::::::::::::::::::
+        |  ::::::::::::::::::'       |      ::::::::::::::::::::::::::::::::::'
+        | :::::::::::::::::::'       |    :::::::::::::::::::::::::::::::::::::'
+        +--------------------> $     +--------------------> $
+       /                            /
+      v Vol                        v Vol
+
+  VIX: 28   Signal: BUY        VIX: 14   Signal: STRONG BUY
+  Cash: 25%  Alpha: +18%       Cash: 15%  Alpha: +22%
+```
+
+### Full Cycle Performance vs. S&P 500
+
+```
   Cumulative Return
    ^
-   |                                                    .--* Portfolio
-   |                                                .--'    (+38.2%)
-   |                                            .--'
-   |  Engine                                .--'
-   |  Portfolio ----                    .--'
-   |               \               .--'           ___--- S&P 500
-   |                \          .--'          ___---      (+16.1%)
+   |                                                    .--* Portfolio (+38.2%)
+   |                                                .--'
+   |  Engine                                    .--'
+   |  Portfolio ---                         .--'
+   |              \                     .--'           ___--- S&P 500 (+16.1%)
+   |               \               .--'           ___---
+   |                \          .--'          ___---
    |                 \     .--'         ___---
    |                  \.--'        ___---
    |                   *      ___---
-   |              ____/ \ ___---
-   |         ____/       X          The engine AVOIDED the crash
-   |    ____/       ___/ \          and RE-ENTERED at the bottom
-   |___/       ___---     \___
-   |      ___---              \___        Alpha: +22.1%
-   | ___---                       \___    Sharpe: 2.10 vs 0.74
-   +-----------------------------------> Time (Days)
-   0     120    185    280    400    600    756
-        Bull   Trans  Crisis  Trans  New Bull
+   |              ____/ \ ___---         The engine AVOIDED the crash
+   |         ____/       X              and RE-ENTERED at the bottom
+   |    ____/       ___/ \
+   |___/       ___---     \___           Alpha: +22.1%
+   | ___---                   \___       Sharpe: 2.10 vs 0.74
+   +-----------------------------------> Time
+   0     120    185    280    400    756
+        Bull   Trans  Crisis  Recov  New Bull
 ```
-
----
-
-## How the 3D Coordinate System Works
-
-The engine computes a **P&L surface** in 3 dimensions that updates every simulation tick:
-
-```
-                    P&L ($)
-                     ^
-                     |        The surface MORPHS in real-time:
-                     |
-                     |        Bull Quiet:    Smooth, elevated (green)
-                     |        Transition:    Rippled, tilting (yellow)
-                     |        Bear Volatile: Inverted, deep red
-                     |        Recovery:      Re-forming upward (blue)
-                     |
-                     +-------------------> Spot Price ($)
-                    /
-                   /
-                  /
-                 v
-              Volatility (IV)
-
-  3rd Axis (Time) moves the surface forward:
-  ================================================>
-  T+0        T+5d       T+10d      T+20d      T+30d
-  Current    Near       Mid        Far        Expiry
-```
-
-### Color Encoding by Regime
-
-| Color | Regime | Surface Shape | Signal |
-|-------|--------|---------------|--------|
-| Green | Bull Quiet | Smooth dome, elevated P&L plateau | Strong Buy / Buy |
-| Yellow | Transition | Rippled, asymmetric, vol skew appearing | Reduce Risk |
-| Orange | Bull Volatile / Bear Quiet | Steep gradients, mixed peaks/valleys | Hold / Reduce |
-| Red | Bear Volatile (Crisis) | Inverted surface, deep loss valleys | Go To Cash / Crisis |
-| Blue | Recovery | Re-forming dome, steep upward slope | Buy |
 
 ---
 
@@ -371,12 +218,57 @@ src/
     └── csv_parser      # Data I/O
 ```
 
+### Data Flow
+
+```
+ Market Data (Synthetic S&P 500)
+           |
+           v
++------------------------+
+|   Feature Extraction   |  Returns, Vol, Spreads, Volume
++------------------------+
+           |
+     +-----+-----+
+     |           |
+     v           v
++-----------+  +------------------+
+| HMM Regime|  | Early Warning    |
+| Detector  |->| System           |
++-----------+  +------------------+
+     |           |
+     v           v
++-----------+  +------------------+
+| Strategy  |  | Trading Signal   |
+| Manager   |  | BUY/HOLD/CRISIS  |
++-----------+  +------------------+
+     |           |
+     +-----+-----+
+           |
+           v
++------------------------+
+|   Portfolio Engine     |
+|   (P&L, Greeks, VaR)  |
++------------------------+
+           |
+     +-----+-----+
+     |           |
+     v           v
++-----------+  +------------------+
+| Stress    |  | 3D Visualization |
+| Testing   |  | WebGL + SSE      |
++-----------+  +------------------+
+                       |
+                       v
+              localhost:8080
+```
+
 ## Build & Run
 
 ### Requirements
 - C++20 compiler (GCC 10+, Clang 12+)
 - CMake 3.16+
 - POSIX threads
+- Python 3.8+ with matplotlib, numpy, Pillow (for visualization generation only)
 
 ### Build
 ```bash
@@ -404,6 +296,13 @@ make -j$(nproc)
 ./build/stress_engine --headless --days 500 --speed 0
 ```
 
+### Regenerate Visualization GIFs
+```bash
+pip install matplotlib numpy Pillow
+python3 scripts/generate_visualizations.py
+python3 scripts/gen_regime_3d.py
+```
+
 ### CLI Options
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -412,62 +311,6 @@ make -j$(nproc)
 | `--speed` | 100 | Milliseconds between frames |
 | `--price` | 4500 | Initial S&P 500 price |
 | `--headless` | false | Run without web server |
-
----
-
-## How It Works
-
-```
-                  Market Data (Synthetic S&P 500)
-                            |
-                            v
-               +------------------------+
-               |   Feature Extraction   |  Returns, Vol, Spreads, Volume
-               +------------------------+
-                            |
-              +-------------+-------------+
-              |                           |
-              v                           v
-  +---------------------+    +------------------------+
-  | HMM Regime Detector |    | Early Warning System   |
-  | (5-State Markov)    |--->| (Multi-Factor Score)   |
-  +---------------------+    +------------------------+
-              |                           |
-              v                           v
-  +---------------------+    +------------------------+
-  | Strategy Manager    |    | Trading Signal         |
-  | (Regime-Optimal     |    | BUY / HOLD / CASH /    |
-  |  Strategy Selection)|    | CRISIS                 |
-  +---------------------+    +------------------------+
-              |                           |
-              +-------------+-------------+
-                            |
-                            v
-               +------------------------+
-               |   Portfolio Engine     |
-               |   (P&L, Greeks, VaR)  |
-               +------------------------+
-                            |
-              +-------------+-------------+
-              |                           |
-              v                           v
-  +---------------------+    +------------------------+
-  | Stress Testing      |    | 3D Visualization       |
-  | (8 Historical +     |    | (WebGL Surface +       |
-  |  MC + Parametric)   |    |  Live Regime Timeline) |
-  +---------------------+    +------------------------+
-                                        |
-                                        v
-                              Browser: localhost:8080
-```
-
-1. **Market Data Generation**: Synthetic S&P 500 data with realistic regime transitions using a Markov chain
-2. **Regime Detection**: HMM processes daily features (returns, vol, credit spreads) and computes regime probabilities
-3. **Signal Generation**: Early warning system combines crisis probability, vol acceleration, price momentum, and credit spread widening
-4. **Portfolio Management**: Strategy manager selects optimal options strategies per regime
-5. **Dynamic Allocation**: Cash/equity/options ratios adjusted based on regime signals to outperform S&P 500 with lower drawdown
-6. **Stress Testing**: Every frame runs all 8 historical scenarios against current portfolio
-7. **3D Visualization**: P&L surface, regime timeline, and metrics streamed via SSE to browser
 
 ---
 
@@ -486,21 +329,20 @@ make -j$(nproc)
 ## Stress Test Scenarios
 
 ```
-  Portfolio Impact by Historical Scenario:
+  Portfolio Impact by Historical Scenario (unhedged):
 
-  Black Monday 1987  |████████████████████████████████████████| -22.6%  VIX +40
   GFC 2008           |██████████████████████████████████████████████████| -55.0%  VIX +50
+  Dot-Com 2000       |███████████████████████████████████████████████| -45.0%  VIX +20
   COVID Crash 2020   |██████████████████████████████████| -34.0%  VIX +55
+  Rate Hike 2022     |█████████████████████████| -25.0%  VIX +15
+  Black Monday 1987  |████████████████████████████████████████| -22.6%  VIX +40
   Volmageddon 2018   |██████████| -10.0%  VIX +35
   Flash Crash 2010   |█████████| -9.0%  VIX +25
-  Rate Hike 2022     |█████████████████████████| -25.0%  VIX +15
-  Dot-Com 2000       |███████████████████████████████████████████████| -45.0%  VIX +20
-  Meme Stocks 2021   |               ████████████████| +15.0%  VIX +30
 
   WITH Engine Hedging Active:
-  GFC 2008           |████████████| -12.0%  (vs -55% unhedged = 43% saved)
-  COVID 2020         |████████| -8.0%   (vs -34% unhedged = 26% saved)
-  Black Monday       |██████| -6.0%   (vs -22.6% unhedged = 16.6% saved)
+  GFC 2008           |████████████| -12.0%  (43% loss avoided)
+  COVID 2020         |████████| -8.0%   (26% loss avoided)
+  Black Monday       |██████| -6.0%   (16.6% loss avoided)
 ```
 
 ---
