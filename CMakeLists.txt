@@ -29,6 +29,9 @@ set(ENGINE_SOURCES
     src/utils/math_utils.cpp
     src/utils/csv_parser.cpp
     src/utils/json_writer.cpp
+    src/core/arima.cpp
+    src/core/backtester.cpp
+    src/core/statistical_tests.cpp
 )
 
 # Main library
