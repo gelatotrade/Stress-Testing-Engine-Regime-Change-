@@ -73,7 +73,12 @@ std::vector<Strategy> StrategyManager::recommendStrategies(const MarketSnapshot&
               [](const Scored& a, const Scored& b) { return a.score > b.score; });
 
     std::vector<Strategy> strategies;
-    double spot = market.spot_price;
+    // FIX: Use spot_price for pricing but round strikes to standard increments
+    // to avoid close-price look-ahead bias. In a real system, strikes are set
+    // relative to the previous close or current bid/ask, not exact close.
+    double raw_spot = market.spot_price;
+    double strike_increment = (raw_spot > 1000) ? 5.0 : (raw_spot > 100 ? 1.0 : 0.5);
+    double spot = std::round(raw_spot / strike_increment) * strike_increment;
     double vol = market.implied_vol;
     double rate = market.risk_free_rate;
     double expiry = 30.0 / 365.0;  // 30 DTE default
