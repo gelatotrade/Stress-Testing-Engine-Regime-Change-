@@ -77,68 +77,31 @@ The Hidden Markov Model's **5x5 transition probability matrix** shows the likeli
 
 ## How the 3D Coordinate System Changes Per Regime
 
-```
-  BULL QUIET                    TRANSITION                   BEAR VOLATILE (CRISIS)
-  Surface: Smooth Green         Surface: Rippling Yellow     Surface: Inverted Red
+Watch the 3D P&L surface **morph in real-time** as the engine cycles through all 5 market regimes. The surface color, shape, and height change as the Hidden Markov Model detects regime transitions. The timeline bar at the bottom tracks the current phase.
 
-       P&L ($)                      P&L ($)                      P&L ($)
-        ^                            ^                            ^
-        |   .:::::::::::.            |      /\    /\              |
-        | .:::::::::::::::::.        |    /    \/    \            |  - - - - breakeven
-        |:::::::::::::::::::::       |  /   ~    ~   \           |
-        |:::::::::::::::::::'        | / ~~  !!!!  ~~ \          |'.
-        |::::::::::::::::::'         |'    !!!!!!!!    \         |  '''...
-        +--------------------> $     +--------------------> $    +---'---------'---> $
-       /                            /                            /
-      v Vol                        v Vol                        v Vol
+![3D Regime Phase Comparison Animation](docs/img/regime_phases_comparison.gif)
 
-  VIX: 12    Signal: BUY       VIX: 25   Signal: REDUCE     VIX: 67   Signal: CRISIS
-  Cash: 15%  Alpha: +3%        Cash: 40%  Alpha: +1.8%      Cash: 70%  Alpha: +26%
-  Sharpe: 1.85                 Warning: 62%                  Warning: 95%
+**What changes per regime:**
+- **Bull Quiet**: Smooth green elevated dome -- stable premium income, low vol, high Sharpe
+- **Transition**: Surface starts rippling and tilting -- early warning score rising, VIX climbing
+- **Bear Volatile**: Surface **inverts** into a deep red crater -- crisis mode, max cash allocation
+- **Recovery**: Surface reforms upward with steep blue slopes -- re-entering at the bottom
+- **New Bull**: Smooth green dome returns at higher levels -- full cycle alpha locked in
 
-
-  RECOVERY                      NEW BULL
-  Surface: Reforming Blue       Surface: Smooth Green (New Cycle)
-
-       P&L ($)                      P&L ($)
-        ^                            ^
-        |        .:::::.              |                .:::::::::::::.
-        |     .::::::::::::.         |           .::::::::::::::::::::::::.
-        |   :::::::::::::::::.       |        .:::::::::::::::::::::::::::::::
-        |  ::::::::::::::::::'       |      ::::::::::::::::::::::::::::::::::'
-        | :::::::::::::::::::'       |    :::::::::::::::::::::::::::::::::::::'
-        +--------------------> $     +--------------------> $
-       /                            /
-      v Vol                        v Vol
-
-  VIX: 28   Signal: BUY        VIX: 14   Signal: STRONG BUY
-  Cash: 25%  Alpha: +18%       Cash: 15%  Alpha: +22%
-```
+---
 
 ### Full Cycle Performance vs. S&P 500
 
-```
-  Cumulative Return
-   ^
-   |                                                    .--* Portfolio (+38.2%)
-   |                                                .--'
-   |  Engine                                    .--'
-   |  Portfolio ---                         .--'
-   |              \                     .--'           ___--- S&P 500 (+16.1%)
-   |               \               .--'           ___---
-   |                \          .--'          ___---
-   |                 \     .--'         ___---
-   |                  \.--'        ___---
-   |                   *      ___---
-   |              ____/ \ ___---         The engine AVOIDED the crash
-   |         ____/       X              and RE-ENTERED at the bottom
-   |    ____/       ___/ \
-   |___/       ___---     \___           Alpha: +22.1%
-   | ___---                   \___       Sharpe: 2.10 vs 0.74
-   +-----------------------------------> Time
-   0     120    185    280    400    756
-        Bull   Trans  Crisis  Recov  New Bull
-```
+The animated chart below shows the engine's portfolio (green) vs. the S&P 500 benchmark (red) over a full 756-day cycle. Watch how the regime detection system **avoids the crash** by shifting to cash early, then **re-enters aggressively** at the bottom during recovery.
+
+![Performance vs S&P 500 Animation](docs/img/performance_vs_sp500.gif)
+
+**Key observations:**
+- **Day 180-240 (Transition)**: Engine detects regime shift, starts reducing equity exposure
+- **Day 240-340 (Crisis)**: Portfolio holds 70% cash while S&P drops -- drawdown limited to ~8% vs ~35%
+- **Day 340-460 (Recovery)**: Engine re-enters with 1.3x exposure, capturing the V-shaped recovery
+- **Day 460+ (New Bull)**: Full exposure with options premium income, alpha continues to compound
+- **Lower panel**: Drawdown comparison -- the engine's max drawdown is a fraction of the benchmark's
 
 ---
 
