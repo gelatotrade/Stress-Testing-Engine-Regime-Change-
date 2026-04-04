@@ -112,73 +112,65 @@ def generate_regime_cycle():
     ivol = np.linspace(8, 62, n)
     X, Y = np.meshgrid(spot, ivol)
 
-    regimes = [
-        ('BULL QUIET',    '\u25cf LIVE | SP500: $5,280 | VIX 12 | Signal: STRONG BUY | BUY 892 SPY',  GREEN),
-        ('TRANSITION',    '\u25cf LIVE | SP500: $5,050 | VIX 24 | Signal: REDUCE RISK | SELL 446 SPY', YELLOW),
-        ('BEAR VOLATILE', '\u25cf LIVE | SP500: $3,900 | VIX 67 | Signal: CRISIS | SELL 357 SPY',      RED),
-        ('RECOVERY',      '\u25cf LIVE | SP500: $4,500 | VIX 28 | Signal: BUY | BUY 663 SPY',          CYAN),
-        ('NEW BULL',      '\u25cf LIVE | SP500: $5,600 | VIX 14 | Signal: STRONG BUY | BUY 224 SPY',   GREEN),
+    regime_names = ['BULL QUIET', 'TRANSITION', 'BEAR VOLATILE', 'RECOVERY', 'NEW BULL']
+    regime_subs = [
+        '\u25cf LIVE | SP500: $5,280 | VIX 12 | Signal: STRONG BUY | BUY 892 SPY',
+        '\u25cf LIVE | SP500: $5,050 | VIX 24 | Signal: REDUCE RISK | SELL 446 SPY',
+        '\u25cf LIVE | SP500: $3,900 | VIX 67 | Signal: CRISIS | SELL 357 SPY',
+        '\u25cf LIVE | SP500: $4,500 | VIX 28 | Signal: BUY | BUY 663 SPY',
+        '\u25cf LIVE | SP500: $5,600 | VIX 14 | Signal: STRONG BUY | BUY 224 SPY',
     ]
+    regime_cols = [GREEN, YELLOW, RED, CYAN, GREEN]
     elevations = [30, 26, 20, 28, 30]
-    frames_per = 12
-    trans_frames = 8  # extra frames for each transition
 
     def _bull(X, Y):
         return 28 - 0.014 * (X - 100)**2 - 0.006 * (Y - 16)**2
 
-    def _transition(X, Y, ripple=1.0):
+    def _transition(X, Y):
         base = 10 - 0.010 * (X - 100)**2 - 0.005 * (Y - 28)**2
-        waves = ripple * 6 * np.sin(0.4 * X) * np.cos(0.3 * Y)
-        return base + waves
+        return base + 6 * np.sin(0.4 * X) * np.cos(0.3 * Y)
 
     def _crisis(X, Y):
         crater = -10 * np.exp(-0.015 * ((X - 88)**2 + (Y - 52)**2))
         return -22 + 0.007 * (X - 92)**2 + 0.004 * (Y - 50)**2 + crater
 
-    def _recovery(X, Y, frac=1.0):
-        return (-8 + 24 * frac) - 0.008 * (X - 100)**2 - 0.005 * (Y - 30)**2
+    def _recovery(X, Y):
+        return 16 - 0.008 * (X - 100)**2 - 0.005 * (Y - 30)**2
 
-    regime_surfaces = [
-        lambda X, Y: _bull(X, Y),
-        lambda X, Y: _transition(X, Y, 1.0),
-        lambda X, Y: _crisis(X, Y),
-        lambda X, Y: _recovery(X, Y, 1.0),
-        lambda X, Y: _bull(X, Y),
-    ]
+    surfaces = [_bull, _transition, _crisis, _recovery, _bull]
+    n_reg = len(surfaces)
+
+    def smoothstep(t):
+        t = max(0.0, min(1.0, t))
+        return t * t * (3 - 2 * t)
 
     def blend_cmap(cmap_a, cmap_b, bt, z_norm):
-        ca = cmap_a(z_norm)
-        cb = cmap_b(z_norm)
-        return ca * (1 - bt) + cb * bt
+        return cmap_a(z_norm) * (1 - bt) + cmap_b(z_norm) * bt
 
-    # Build frame schedule: (regime_idx, is_transition, next_idx, blend_t)
-    frame_schedule = []
-    for ri in range(len(regimes)):
-        for sf in range(frames_per):
-            frame_schedule.append((ri, False, ri, 0.0))
-        if ri < len(regimes) - 1:
-            for tf in range(trans_frames):
-                bt = (tf + 1) / (trans_frames + 1)
-                frame_schedule.append((ri, True, ri + 1, bt))
-
-    total = len(frame_schedule)
+    total = 120  # continuous frames
     frames = []
-    for i, (ri, is_trans, nri, blend_t) in enumerate(frame_schedule):
-        rname, rsub, rcol = regimes[ri]
+    for i in range(total):
+        t = i / (total - 1) * (n_reg - 1)
+        ri_a = min(int(t), n_reg - 2)
+        ri_b = ri_a + 1
+        bt = smoothstep(t - ri_a)
 
-        if is_trans:
-            bt = blend_t * blend_t * (3 - 2 * blend_t)  # smoothstep
-            Z_a = regime_surfaces[ri](X, Y)
-            Z_b = regime_surfaces[nri](X, Y)
-            Z = Z_a * (1 - bt) + Z_b * bt
-            nname, nsub, nrcol = regimes[nri]
-            rname = f'{rname} \u2192 {nname}'
-            rsub = f'\u25cf LIVE | TRANSITIONING ({bt*100:.0f}%) | Regime shift detected'
-            rcol = nrcol
-            elev = elevations[ri] * (1 - bt) + elevations[nri] * bt
+        Z = surfaces[ri_a](X, Y) * (1 - bt) + surfaces[ri_b](X, Y) * bt
+
+        if bt < 0.15:
+            rname = regime_names[ri_a]
+            rsub = regime_subs[ri_a]
+            rcol = regime_cols[ri_a]
+        elif bt > 0.85:
+            rname = regime_names[ri_b]
+            rsub = regime_subs[ri_b]
+            rcol = regime_cols[ri_b]
         else:
-            Z = regime_surfaces[ri](X, Y)
-            elev = elevations[ri]
+            rname = f'{regime_names[ri_a]} \u2192 {regime_names[ri_b]}'
+            rsub = f'\u25cf LIVE | TRANSITIONING ({bt*100:.0f}%) | Regime shift detected'
+            rcol = regime_cols[ri_b]
+
+        elev = elevations[ri_a] * (1 - bt) + elevations[ri_b] * bt
 
         fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG_COLOR)
         ax = fig.add_subplot(111, projection='3d')
@@ -190,29 +182,22 @@ def generate_regime_cycle():
         ax.grid(True, color='#223344', alpha=0.2)
         ax.tick_params(colors='#556677', labelsize=7)
 
-        # Diverging colormap (blended during transitions)
         z_min, z_max = Z.min(), Z.max()
         z_range = z_max - z_min if z_max > z_min else 1.0
         z_norm_arr = (Z - z_min) / z_range
-
-        if is_trans:
-            face_colors = blend_cmap(REGIME_CMAPS[ri], REGIME_CMAPS[nri], bt, z_norm_arr)
-        else:
-            face_colors = REGIME_CMAPS[ri](z_norm_arr)
+        face_colors = blend_cmap(REGIME_CMAPS[ri_a], REGIME_CMAPS[ri_b], bt, z_norm_arr)
 
         ax.plot_surface(X, Y, Z, facecolors=face_colors, alpha=0.93,
                         rstride=1, cstride=1, edgecolor='none',
                         antialiased=True, shade=True)
 
-        # Wireframe overlay for depth
         ax.plot_wireframe(X[::4, ::4], Y[::4, ::4], Z[::4, ::4],
                           color='white', alpha=0.05, linewidth=0.3)
 
-        # Floor contour projection
         z_floor = z_min - z_range * 0.15
         try:
             ax.contour(X, Y, Z, levels=np.linspace(z_min, z_max, 8),
-                       zdir='z', offset=z_floor, cmap=REGIME_CMAPS[ri], alpha=0.3, linewidths=0.5)
+                       zdir='z', offset=z_floor, cmap=REGIME_CMAPS[ri_a], alpha=0.3, linewidths=0.5)
         except Exception:
             pass
 
@@ -220,8 +205,7 @@ def generate_regime_cycle():
         ax.set_xlabel('Spot Price ($)', color='#667788', fontsize=9, labelpad=8)
         ax.set_ylabel('Implied Vol (%)', color='#667788', fontsize=9, labelpad=8)
         ax.set_zlabel('P&L ($)', color='#667788', fontsize=9, labelpad=8)
-
-        ax.view_init(elev=elev, azim=215 + i * 2)
+        ax.view_init(elev=elev, azim=215 + i * 1.5)
 
         fig.suptitle(f'Regime: {rname}\n{rsub}',
                      color=rcol, fontsize=13, fontweight='bold', y=0.96,
@@ -230,7 +214,7 @@ def generate_regime_cycle():
         frames.append(_fig_to_image(fig))
         plt.close(fig)
 
-    _save_gif(frames, OUT_DIR / 'regime_cycle_3d.gif')
+    _save_gif(frames, OUT_DIR / 'regime_cycle_3d.gif', duration=120)
 
 
 # ===================================================================

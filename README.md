@@ -1,6 +1,6 @@
 # Stress Testing Engine with Regime Change Detection
 
-A high-performance C++ engine for **live** and **backtest** stress testing of options portfolio strategies. Features high-quality real-time 3D visualization (150 DPI, 60-point grid, **diverging colormaps** where peaks and valleys have distinctly different hues, **dedicated transition frames** between regimes with smooth colormap blending, wireframe overlays, contour floor projections), Hidden Markov Model regime detection, an execution engine for automated trading, and early warning signals for optimal risk allocation vs. S&P 500 benchmark.
+A high-performance C++ engine for **live** and **backtest** stress testing of options portfolio strategies. Features high-quality real-time 3D visualization (150 DPI, 60-point grid, **diverging colormaps** where peaks and valleys have distinctly different hues, **fully continuous smooth interpolation** between regimes with no abrupt jumps — every frame smoothly blends surface shape + colormap + camera, wireframe overlays, contour floor projections), Hidden Markov Model regime detection, an execution engine for automated trading, and early warning signals for optimal risk allocation vs. S&P 500 benchmark.
 
 **The engine runs in two modes:**
 - **Live Mode** (`--live`): Connects to real-time market data, detects regime changes as they happen, and automatically executes trades through the execution engine to outperform the S&P 500
@@ -14,7 +14,7 @@ The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Vola
 
 ### P&L Surface Morphing Through Live Regime Detection
 
-> The 3D surface rotates and deforms live as the HMM detects regime transitions: **BULL QUIET** (blue-to-green-to-yellow diverging) --> **TRANSITION** (purple-to-amber-to-cream diverging) --> **BEAR VOLATILE / CRISIS** (deep-blue-to-purple-to-red-to-gold diverging) --> **RECOVERY** (purple-to-blue-to-cyan-to-mint diverging) --> **NEW BULL**. Each regime uses a **diverging colormap** so peaks and valleys have clearly different hues (not just light/dark). Between each regime, **8-10 dedicated transition frames** show the surface morphing and colormap blending smoothly from one regime to the next. Wireframe overlay adds depth perception. Contour lines project onto the floor plane. Camera elevation shifts per regime (lower during crisis). The execution engine trades are shown in real-time.
+> The animation is **fully continuous** — there are no static frames or abrupt jumps. Every single frame smoothly interpolates both the surface shape and the colormap between the two nearest regime keyframes using smoothstep (ease-in/out) blending. The regimes flow: **BULL QUIET** (blue valleys → green peaks) --> **TRANSITION** (purple → amber) --> **BEAR VOLATILE / CRISIS** (deep-blue → red → gold) --> **RECOVERY** (purple → cyan → mint) --> **NEW BULL**. 120-150 frames total at 120ms each for buttery-smooth playback. Diverging colormaps ensure peaks and valleys always have clearly different hues. Wireframe overlay adds depth perception. Contour lines project onto the floor. Camera elevation continuously shifts (lower during crisis). The execution engine trades are shown in real-time.
 
 ![3D P&L Surface - Live Regime Cycle](docs/img/regime_cycle_3d.gif)
 
@@ -23,7 +23,7 @@ The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Vola
 - **Y-Axis**: Implied Volatility (%) -- option-implied expected volatility (VIX)
 - **Z-Axis**: P&L ($) -- portfolio profit/loss from Iron Condor strategy
 - **Color**: Diverging colormaps per regime -- valleys and peaks have distinctly different hues (e.g. bull: blue valleys → green peaks → yellow tops; crisis: deep-blue valleys → purple → red peaks → gold tops)
-- **Transitions**: 8-10 extra frames between each regime with smooth surface morphing + colormap blending
+- **Smooth transitions**: Fully continuous — every frame interpolates surface + colormap + camera via smoothstep, no static or abrupt frames
 - **Wireframe**: White semi-transparent wireframe overlay every 4th grid line for depth perception
 - **Floor contours**: 8-level contour projection on the Z-floor showing P&L topology
 - **Camera**: Variable elevation (30° bull, 20° crisis) with continuous azimuth rotation
@@ -32,14 +32,12 @@ The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Vola
 | Phase | Surface Shape | Colormap (valleys → peaks) | Camera | VIX | Signal | Execution Action | Cash |
 |-------|--------------|---------------------------|--------|-----|--------|-----------------|------|
 | Bull Quiet | Smooth elevated dome (+28 P&L peak) | Blue → Green → Yellow | 30° elev | ~12 | STRONG BUY | BUY 892 SPY | 15% |
-| *→ Transition* | *8 blend frames: surface morphing + colormap fading* | *Bull → Trans blend* | *30°→26°* | | *TRANSITIONING* | | |
 | Transition | Rippling surface with 6x sine·cos waves | Purple → Amber → Cream | 26° elev | ~24 | REDUCE RISK | SELL 446 SPY | 40% |
-| *→ Bear* | *8 blend frames* | *Trans → Crisis blend* | *26°→20°* | | *TRANSITIONING* | | |
 | Bear Volatile | Inverted crater (-22 base, -10 Gaussian dip) | Deep-blue → Purple → Red → Gold | 20° elev | ~67 | CRISIS | SELL 357 SPY | 70% |
-| *→ Recovery* | *8 blend frames* | *Crisis → Recovery blend* | *20°→28°* | | *TRANSITIONING* | | |
-| Recovery | Reforming upward slope (-8→+16) | Purple → Blue → Cyan → Mint | 28° elev | ~28 | BUY | BUY 663 SPY | 25% |
-| *→ New Bull* | *8 blend frames* | *Recovery → Bull blend* | *28°→30°* | | *TRANSITIONING* | | |
+| Recovery | Reforming upward slope (+16 peak) | Purple → Blue → Cyan → Mint | 28° elev | ~28 | BUY | BUY 663 SPY | 25% |
 | New Bull | Smooth dome returns (+26 peak) | Blue → Green → Yellow | 30° elev | ~14 | STRONG BUY | BUY 224 SPY | 15% |
+
+> All transitions between rows are **continuous** — the surface, colormap, and camera blend smoothly via smoothstep interpolation across ~30 frames per transition.
 
 ---
 
@@ -88,20 +86,20 @@ The Hidden Markov Model's **5x5 transition probability matrix** shows the likeli
 
 ## How the 3D Coordinate System Changes Per Regime
 
-Watch the 3D P&L surface **morph in real-time** as the engine cycles through all 5 market regimes. Each regime uses a **diverging colormap** (valleys and peaks are different hues), with **8 dedicated transition frames** between each regime showing smooth surface morphing and colormap blending. 12 stable frames + 8 transition frames per regime, 55-point grid, 150 DPI. Each regime shows the execution engine's live trade actions and account state.
+Watch the 3D P&L surface **morph continuously** as the engine cycles through all 5 market regimes. The animation is **fully smooth** — every frame interpolates between the two nearest regimes via smoothstep blending (surface geometry, colormap, camera elevation all blend simultaneously). 120 frames at 120ms = ~14 seconds of fluid animation. 55-point grid, 150 DPI. Diverging colormaps make peaks and valleys instantly distinguishable.
 
 ![3D Regime Phase Comparison Animation](docs/img/regime_phases_comparison.gif)
 
-**What changes per regime:**
-- **Bull Quiet**: Smooth dome (blue valleys → green peaks → yellow tops, 30° camera) -- `BUY 892 SPY @ $528.04` -- Account: $1,000,000
-- **→ Transition**: 8 frames blending surface + colormap from bull to transition
-- **Transition**: Surface rippling (purple valleys → amber peaks → cream tops, 26° camera) -- `SELL 446 SPY @ $505.12` -- Account: $987,420
-- **→ Bear**: 8 frames blending surface + colormap from transition to crisis
-- **Bear Volatile**: Deep crater (deep-blue → purple → red → gold, 20° camera) -- `SELL 357 SPY @ $391.88` -- Account: $932,180
-- **→ Recovery**: 8 frames blending surface + colormap from crisis to recovery
-- **Recovery**: Reforming upward (purple → blue → cyan → mint, 28° camera) -- `BUY 663 SPY @ $450.22` -- Account: $961,540
-- **→ New Bull**: 8 frames blending surface + colormap from recovery to bull
-- **New Bull**: Smooth dome (blue → green → yellow, 30° camera) -- `BUY 224 SPY @ $560.15` -- Account: $1,148,920
+**What you see as the animation flows:**
+- **Bull Quiet**: Smooth dome (blue valleys → green peaks → yellow tops, 30° camera) -- `BUY 892 SPY @ $528.04`
+- **→ smooth morph →** surface ripples grow, colormap fades from green to amber, camera lowers
+- **Transition**: Rippling surface (purple → amber → cream, 26° camera) -- `SELL 446 SPY @ $505.12`
+- **→ smooth morph →** surface inverts into crater, colormap shifts to red, camera drops to 20°
+- **Bear Volatile**: Deep crater (deep-blue → purple → red → gold, 20° camera) -- `SELL 357 SPY @ $391.88`
+- **→ smooth morph →** crater fills, colormap shifts to blue/cyan, camera rises
+- **Recovery**: Reforming upward (purple → blue → cyan → mint, 28° camera) -- `BUY 663 SPY @ $450.22`
+- **→ smooth morph →** dome reforms, colormap returns to green, camera rises to 30°
+- **New Bull**: Smooth dome (blue → green → yellow, 30° camera) -- `BUY 224 SPY @ $560.15`
 
 ---
 
@@ -186,7 +184,7 @@ The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmar
 - **Real-time 3D P&L surface** (Spot x Volatility x P&L) using Three.js/WebGL
 - **150 DPI rendering** with 55-60 point grids for smooth surfaces
 - **Diverging colormaps**: valleys and peaks have distinctly different hues per regime (not just light/dark)
-- **Dedicated transition frames**: 8-10 extra frames between each regime with surface morphing + colormap blending
+- **Fully continuous transitions**: every frame smoothly interpolates surface + colormap + camera via smoothstep, no abrupt jumps
 - **Wireframe overlay**: semi-transparent white wireframe every 4th grid line for depth
 - **Contour floor projections**: 8-level contour lines projected onto Z-floor
 - **Variable camera elevation**: 30° bull, 26° transition, 20° crisis, 28° recovery
@@ -356,7 +354,7 @@ make -j$(nproc)
 ```
 
 ### Regenerate Visualization GIFs (High Quality)
-All scripts render at 150 DPI with high-resolution grids (55-60 pts), per-regime colormaps, wireframe overlays, and contour projections.
+All scripts render at 150 DPI with high-resolution grids (55-60 pts), diverging colormaps, fully continuous smoothstep transitions (120-150 frames, no abrupt jumps), wireframe overlays, and contour projections.
 ```bash
 pip install matplotlib numpy Pillow
 python3 scripts/generate_visualizations.py      # 4 GIFs: regime_cycle_3d, early_warning, stress_test, transition_heatmap

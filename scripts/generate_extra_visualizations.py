@@ -79,103 +79,97 @@ def save_gif(frames, path, duration=FRAME_MS):
 # ===================================================================
 def generate_regime_phases():
     print('Generating regime_phases_comparison.gif ...')
-    n = 55  # was 35
+    n = 55
     spot = np.linspace(78, 122, n)
     ivol = np.linspace(8, 58, n)
     X, Y = np.meshgrid(spot, ivol)
 
+    # Regime keyframe surfaces
     def bull_quiet(X, Y):
         return 28 - 0.014*(X-100)**2 - 0.006*(Y-16)**2
 
-    def transition(X, Y, ripple=1.0):
+    def transition_surf(X, Y):
         base = 10 - 0.010*(X-100)**2 - 0.005*(Y-28)**2
-        waves = ripple * 6 * np.sin(0.4*X) * np.cos(0.3*Y)
+        waves = 6 * np.sin(0.4*X) * np.cos(0.3*Y)
         return base + waves
 
     def crisis(X, Y):
         crater = -10 * np.exp(-0.015*((X-88)**2 + (Y-52)**2))
         return -22 + 0.007*(X-92)**2 + 0.004*(Y-50)**2 + crater
 
-    def recovery(X, Y, frac=0.5):
-        return (-8 + 24*frac) - 0.008*(X-100)**2 - 0.005*(Y-30)**2
+    def recovery(X, Y):
+        return 16 - 0.008*(X-100)**2 - 0.005*(Y-30)**2
 
     def new_bull(X, Y):
         return 26 - 0.013*(X-102)**2 - 0.006*(Y-15)**2
 
-    phases = [
-        ('BULL QUIET',    GREEN,
-         'LIVE | SP500: $5,280 | VIX 12 | Signal: STRONG BUY\n'
-         '[Exec] BUY 892 SPY @ $528.04 | Account: $1,000,000',
-         lambda X,Y,t: bull_quiet(X,Y)),
-        ('TRANSITION',    YELLOW,
-         'LIVE | SP500: $5,050 | VIX 24 | Signal: REDUCE RISK\n'
-         '[Exec] SELL 446 SPY @ $505.12 | Account: $987,420',
-         lambda X,Y,t: transition(X,Y, 0.3+0.7*t)),
-        ('BEAR VOLATILE', RED,
-         'LIVE | SP500: $3,900 | VIX 67 | Signal: CRISIS\n'
-         '[Exec] SELL 357 SPY @ $391.88 | Account: $932,180',
-         lambda X,Y,t: crisis(X,Y)),
-        ('RECOVERY',      CYAN,
-         'LIVE | SP500: $4,500 | VIX 28 | Signal: BUY\n'
-         '[Exec] BUY 663 SPY @ $450.22 | Account: $961,540',
-         lambda X,Y,t: recovery(X,Y, 0.2+0.8*t)),
-        ('NEW BULL',      GREEN,
-         'LIVE | SP500: $5,600 | VIX 14 | Signal: STRONG BUY\n'
-         '[Exec] BUY 224 SPY @ $560.15 | Account: $1,148,920',
-         lambda X,Y,t: new_bull(X,Y)),
+    surfaces = [bull_quiet, transition_surf, crisis, recovery, new_bull]
+
+    phase_names  = ['BULL QUIET', 'TRANSITION', 'BEAR VOLATILE', 'RECOVERY', 'NEW BULL']
+    phase_colors = [GREEN, YELLOW, RED, CYAN, GREEN]
+    phase_infos  = [
+        'LIVE | SP500: $5,280 | VIX 12 | Signal: STRONG BUY\n'
+        '[Exec] BUY 892 SPY @ $528.04 | Account: $1,000,000',
+        'LIVE | SP500: $5,050 | VIX 24 | Signal: REDUCE RISK\n'
+        '[Exec] SELL 446 SPY @ $505.12 | Account: $987,420',
+        'LIVE | SP500: $3,900 | VIX 67 | Signal: CRISIS\n'
+        '[Exec] SELL 357 SPY @ $391.88 | Account: $932,180',
+        'LIVE | SP500: $4,500 | VIX 28 | Signal: BUY\n'
+        '[Exec] BUY 663 SPY @ $450.22 | Account: $961,540',
+        'LIVE | SP500: $5,600 | VIX 14 | Signal: STRONG BUY\n'
+        '[Exec] BUY 224 SPY @ $560.15 | Account: $1,148,920',
     ]
+    elevations = [30, 26, 20, 28, 30]
+    n_phases = len(surfaces)
 
-    frames_per_phase = 12
-    trans_frames = 8  # extra frames for each regime transition
-    num_transitions = len(phases) - 1
-
-    tl_starts = [0, 0.16, 0.25, 0.37, 0.53]
-    tl_ends   = [0.16, 0.25, 0.37, 0.53, 1.0]
     tl_colors = [GREEN, YELLOW, RED, CYAN, GREEN]
     tl_labels = ['Bull', 'Trans', 'Crisis', 'Recov', 'New Bull']
 
-    # Build frame schedule: (phase_idx, local_t, is_transition, next_phase_idx, blend_t)
-    frame_schedule = []
-    for pi in range(len(phases)):
-        for sf in range(frames_per_phase):
-            frame_schedule.append((pi, sf / max(frames_per_phase - 1, 1), False, pi, 0.0))
-        if pi < len(phases) - 1:
-            for tf in range(trans_frames):
-                bt = (tf + 1) / (trans_frames + 1)
-                frame_schedule.append((pi, 1.0, True, pi + 1, bt))
+    total = 120  # continuous frames, no static/transition split
 
-    total = len(frame_schedule)
+    def smoothstep(t):
+        t = max(0.0, min(1.0, t))
+        return t * t * (3 - 2 * t)
 
     def blend_cmap(cmap_a, cmap_b, bt, z_norm):
-        ca = cmap_a(z_norm)
-        cb = cmap_b(z_norm)
-        return ca * (1 - bt) + cb * bt
+        return cmap_a(z_norm) * (1 - bt) + cmap_b(z_norm) * bt
 
     frames = []
-    for fi, (phase_idx, local_t, is_trans, next_idx, blend_t) in enumerate(frame_schedule):
-        name, color, info, surf_fn = phases[phase_idx]
+    for fi in range(total):
+        # Continuous parameter across all regimes
+        t = fi / (total - 1) * (n_phases - 1)  # 0..4
+        ri_a = min(int(t), n_phases - 2)
+        ri_b = ri_a + 1
+        local_t = t - ri_a  # 0..1
+        bt = smoothstep(local_t)
 
-        if is_trans:
-            _, ncolor, ninfo, nsurf_fn = phases[next_idx]
-            # Smoothstep blend
-            bt = blend_t * blend_t * (3 - 2 * blend_t)
-            Z_a = surf_fn(X, Y, 1.0)
-            Z_b = nsurf_fn(X, Y, 0.0)
-            Z = Z_a * (1 - bt) + Z_b * bt
-            name = f'{name} \u2192 {phases[next_idx][0]}'
-            color = ncolor
-            info = f'TRANSITIONING ({bt*100:.0f}%) | Regime shift detected'
+        Z_a = surfaces[ri_a](X, Y)
+        Z_b = surfaces[ri_b](X, Y)
+        Z = Z_a * (1 - bt) + Z_b * bt
+
+        # Display info
+        if bt < 0.15:
+            name = phase_names[ri_a]
+            color = phase_colors[ri_a]
+            info = phase_infos[ri_a]
+        elif bt > 0.85:
+            name = phase_names[ri_b]
+            color = phase_colors[ri_b]
+            info = phase_infos[ri_b]
         else:
-            Z = surf_fn(X, Y, local_t)
+            name = f'{phase_names[ri_a]} \u2192 {phase_names[ri_b]}'
+            color = phase_colors[ri_b]
+            info = f'TRANSITIONING ({bt*100:.0f}%) | Regime shift detected'
+
+        elev = elevations[ri_a] * (1 - bt) + elevations[ri_b] * bt
 
         fig = plt.figure(figsize=(14, 8.2), facecolor=BG)
         gs = gridspec.GridSpec(5, 1, height_ratios=[0.6, 0.1, 5.5, 0.5, 0.8],
                                hspace=0.05)
 
-        # --- Title row with LIVE indicator ---
+        # --- Title ---
         ax_title = fig.add_subplot(gs[0])
-        ax_title.set_facecolor(BG)
-        ax_title.axis('off')
+        ax_title.set_facecolor(BG); ax_title.axis('off')
         ax_title.text(0.5, 0.5,
                       f'\u25cf LIVE MODE  //  Regime: {name}  //  Execution Engine Active',
                       color=color, fontsize=18, fontweight='bold',
@@ -185,7 +179,7 @@ def generate_regime_phases():
         ax_sp = fig.add_subplot(gs[1])
         ax_sp.set_facecolor(BG); ax_sp.axis('off')
 
-        # --- 3D Surface (high quality) ---
+        # --- 3D Surface ---
         ax3d = fig.add_subplot(gs[2], projection='3d')
         ax3d.set_facecolor(BG)
         ax3d.xaxis.pane.fill = False; ax3d.yaxis.pane.fill = False; ax3d.zaxis.pane.fill = False
@@ -195,28 +189,24 @@ def generate_regime_phases():
         ax3d.grid(True, color='#223344', alpha=0.2)
         ax3d.tick_params(colors='#556677', labelsize=7)
 
-        # Per-regime colormap (blended during transitions)
+        # Continuous colormap blend
         z_min, z_max = Z.min(), Z.max()
         z_range = z_max - z_min if z_max > z_min else 1.0
         z_norm_arr = (Z - z_min) / z_range
-        if is_trans:
-            face_colors = blend_cmap(REGIME_CMAPS[phase_idx], REGIME_CMAPS[next_idx], bt, z_norm_arr)
-        else:
-            face_colors = REGIME_CMAPS[phase_idx](z_norm_arr)
+        face_colors = blend_cmap(REGIME_CMAPS[ri_a], REGIME_CMAPS[ri_b], bt, z_norm_arr)
 
         ax3d.plot_surface(X, Y, Z, facecolors=face_colors, alpha=0.93,
                           rstride=1, cstride=1, edgecolor='none', antialiased=True,
                           shade=True)
 
-        # Wireframe for depth
         ax3d.plot_wireframe(X[::4, ::4], Y[::4, ::4], Z[::4, ::4],
                             color='white', alpha=0.05, linewidth=0.3)
 
-        # Floor contour
         z_floor = z_min - z_range * 0.15
         try:
             ax3d.contour(X, Y, Z, levels=np.linspace(z_min, z_max, 8),
-                         zdir='z', offset=z_floor, cmap=rcmap, alpha=0.3, linewidths=0.5)
+                         zdir='z', offset=z_floor, cmap=REGIME_CMAPS[ri_a], alpha=0.3,
+                         linewidths=0.5)
         except Exception:
             pass
 
@@ -224,17 +214,9 @@ def generate_regime_phases():
         ax3d.set_xlabel('Spot Price ($)', color=DIM, fontsize=9, labelpad=8)
         ax3d.set_ylabel('Implied Vol (%)', color=DIM, fontsize=9, labelpad=8)
         ax3d.set_zlabel('P&L ($K)', color=DIM, fontsize=9, labelpad=8)
+        ax3d.view_init(elev=elev, azim=210 + fi * 1.2)
 
-        # Camera elevation varies by regime (interpolated during transitions)
-        elevations = [30, 26, 20, 28, 30]
-        if is_trans:
-            elev = elevations[phase_idx] * (1 - bt) + elevations[next_idx] * bt
-        else:
-            elev = elevations[phase_idx]
-        azim = 210 + fi * 1.6
-        ax3d.view_init(elev=elev, azim=azim)
-
-        # --- Info panel with execution data ---
+        # --- Info panel ---
         ax_info = fig.add_subplot(gs[3])
         ax_info.set_facecolor(BG); ax_info.axis('off')
         ax_info.text(0.5, 0.5, info, color=color, fontsize=10,
@@ -246,32 +228,31 @@ def generate_regime_phases():
         ax_tl.set_facecolor(BG); ax_tl.axis('off')
         ax_tl.set_xlim(0, 1); ax_tl.set_ylim(0, 1)
 
-        active_phases = {phase_idx}
-        if is_trans:
-            active_phases.add(next_idx)
-
-        for k in range(len(phases)):
-            x0, x1 = tl_starts[k], tl_ends[k]
-            is_active = k in active_phases
-            alpha_v = 0.9 if is_active else 0.25
-            lw = 3 if is_active else 0
+        seg_w = 1.0 / n_phases
+        progress_frac = t / (n_phases - 1)
+        for k in range(n_phases):
+            x0 = k * seg_w
+            fill = min(1.0, max(0.0, progress_frac * n_phases - k))
+            alpha_v = 0.25 + 0.65 * fill
+            is_active = (k == ri_a) or (k == ri_b and bt > 0.15)
             ec = 'white' if is_active else 'none'
-            rect = plt.Rectangle((x0, 0.3), x1-x0, 0.4,
+            lw = 2.5 if is_active else 0
+            rect = plt.Rectangle((x0, 0.3), seg_w, 0.4,
                                  facecolor=tl_colors[k], alpha=alpha_v,
                                  edgecolor=ec, linewidth=lw)
             ax_tl.add_patch(rect)
-            ax_tl.text((x0+x1)/2, 0.5, tl_labels[k], color='white' if is_active else DIM,
+            lbl_col = 'white' if is_active else DIM
+            ax_tl.text(x0 + seg_w/2, 0.5, tl_labels[k], color=lbl_col,
                        fontsize=8, ha='center', va='center', fontweight='bold',
                        family='monospace')
 
-        global_frac = fi / total
-        ax_tl.plot([global_frac], [0.15], marker='^', color='white',
+        ax_tl.plot([progress_frac], [0.15], marker='^', color='white',
                    markersize=8, transform=ax_tl.transAxes, clip_on=False)
 
         frames.append(fig_to_img(fig, 1400, 820))
         plt.close(fig)
 
-    save_gif(frames, OUT_DIR / 'regime_phases_comparison.gif', duration=FRAME_MS)
+    save_gif(frames, OUT_DIR / 'regime_phases_comparison.gif', duration=120)
 
 
 # ===================================================================
