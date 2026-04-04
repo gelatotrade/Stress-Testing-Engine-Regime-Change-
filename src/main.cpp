@@ -10,6 +10,8 @@
 #include "visualization/web_server.h"
 #include "visualization/data_broadcaster.h"
 #include "utils/csv_parser.h"
+#include "live/live_data_feed.h"
+#include "execution/execution_engine.h"
 
 #include <iostream>
 #include <iomanip>
@@ -68,50 +70,14 @@ void printSignal(const ste::TradingSignal& signal) {
               << "\033[0m" << std::endl;
 }
 
-int main(int argc, char* argv[]) {
-    std::signal(SIGINT, signalHandler);
-    std::signal(SIGTERM, signalHandler);
+// ============================================================
+// Simulation Mode (original backtest)
+// ============================================================
+int runSimulation(int port, int sim_days, int speed_ms, double initial_price,
+                  bool headless, ste::Timeframe timeframe) {
 
-    printBanner();
-
-    // Configuration
-    int port = 8080;
-    int sim_days = 756;         // 3 years of trading days
-    int speed_ms = 100;         // ms between frames
-    double initial_price = 4500.0;
-    bool headless = false;
-    ste::Timeframe timeframe = ste::Timeframe::Daily;
-
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
-        if (arg == "--port" && i + 1 < argc) port = std::stoi(argv[++i]);
-        else if (arg == "--days" && i + 1 < argc) sim_days = std::stoi(argv[++i]);
-        else if (arg == "--speed" && i + 1 < argc) speed_ms = std::stoi(argv[++i]);
-        else if (arg == "--price" && i + 1 < argc) initial_price = std::stod(argv[++i]);
-        else if (arg == "--timeframe" && i + 1 < argc) {
-            std::string tf = argv[++i];
-            if (tf == "hourly" || tf == "1h") timeframe = ste::Timeframe::Hourly;
-            else if (tf == "minute" || tf == "1m") timeframe = ste::Timeframe::Minute;
-            else timeframe = ste::Timeframe::Daily;
-        }
-        else if (arg == "--headless") headless = true;
-        else if (arg == "--help") {
-            std::cout << "Usage: stress_engine [options]\n"
-                      << "  --port <N>          Web server port (default: 8080)\n"
-                      << "  --days <N>          Simulation days (default: 756)\n"
-                      << "  --timeframe <tf>    Timeframe: daily, hourly/1h, minute/1m (default: daily)\n"
-                      << "  --speed <ms>        Speed in ms between frames (default: 100)\n"
-                      << "  --price <N>         Initial SP500 price (default: 4500)\n"
-                      << "  --headless          Run without web server\n"
-                      << "  --help              Show this help\n";
-            return 0;
-        }
-    }
-
-    // Convert sim_days to periods based on timeframe
     int sim_periods = ste::daysToPeriodsCount(sim_days, timeframe);
 
-    // Initialize components
     std::cout << "[*] Initializing market data generator...\n";
     ste::MarketDataGenerator datagen(42);
 
@@ -121,7 +87,6 @@ int main(int argc, char* argv[]) {
     std::cout << "    Generated " << history.size() << " market snapshots ("
               << ste::timeframeName(timeframe) << " timeframe)\n";
 
-    // Save generated data
     ste::CsvParser::saveMarketData("data/market_data.csv", history);
 
     std::cout << "[*] Initializing regime detector (Hidden Markov Model, "
@@ -138,7 +103,6 @@ int main(int argc, char* argv[]) {
     for (const auto& s : tail_scenarios) stress.addScenario(s);
     std::cout << "    Loaded " << stress.scenarios().size() << " stress scenarios\n";
 
-    // Web server
     ste::WebServer server(port);
     ste::DataBroadcaster broadcaster(server, portfolio, detector, stress);
 
@@ -158,38 +122,26 @@ int main(int argc, char* argv[]) {
     for (size_t day = 0; day < history.size() && g_running.load(); ++day) {
         const auto& market = history[day];
 
-        // Update regime detection
         auto regime_state = detector.update(market);
-
-        // Generate trading signal
         auto signal = detector.generateSignal(regime_state, market);
 
-        // Rebalance portfolio periodically or on regime change
         bool regime_changed = (regime_state.current_regime != last_regime);
         rebalance_counter++;
 
         if (regime_changed || rebalance_counter >= rebalance_interval || day == 0) {
-            // Get strategy recommendations
             auto recommended = strategy_mgr.recommendStrategies(market, regime_state);
-
-            // Clear and rebuild portfolio
             while (!portfolio.strategies().empty())
                 portfolio.removeStrategy(0);
             for (const auto& strat : recommended)
                 portfolio.addStrategy(strat);
-
-            // Adjust cash allocation
             portfolio.setCashAllocation(signal.target_cash_pct);
             rebalance_counter = 0;
         }
 
-        // Record returns
         if (day > 0) {
             double spot_ret = (market.spot_price - history[day-1].spot_price) /
                                history[day-1].spot_price;
             double port_ret = spot_ret * (1.0 - portfolio.cashAllocation());
-            // Adjust portfolio return by option P&L
-            double opt_pnl = portfolio.totalPnL(market);
             double prev_value = portfolio.totalValue(history[day-1]);
             if (prev_value > 0) {
                 port_ret = (portfolio.totalValue(market) - prev_value) / prev_value;
@@ -197,7 +149,6 @@ int main(int argc, char* argv[]) {
             portfolio.recordReturn(market.timestamp, port_ret, spot_ret);
         }
 
-        // Print status every ~20 trading days or on regime change
         if (day % print_interval == 0 || regime_changed) {
             if (regime_changed) {
                 std::cout << "\n\033[1m  >>> REGIME CHANGE DETECTED at day "
@@ -228,19 +179,16 @@ int main(int argc, char* argv[]) {
 
         last_regime = regime_state.current_regime;
 
-        // Broadcast visualization frame
         if (!headless) {
             broadcaster.broadcast(market);
         }
 
-        // Control simulation speed
         std::this_thread::sleep_for(std::chrono::milliseconds(speed_ms));
     }
 
     std::cout << "\n" << std::string(70, '=') << std::endl;
     std::cout << "\n[*] Simulation complete!\n\n";
 
-    // Final summary
     auto final_state = portfolio.computeState(history.back());
     std::cout << "  === FINAL RESULTS ===\n"
               << "  Portfolio Value:  $" << std::fixed << std::setprecision(0) << final_state.total_value << "\n"
@@ -251,7 +199,6 @@ int main(int argc, char* argv[]) {
               << "  Max Drawdown:     " << std::setprecision(1) << final_state.max_drawdown * 100.0 << "%\n"
               << "  Regime Changes:   " << detector.regimeHistory().size() << "\n\n";
 
-    // Run final stress test
     std::cout << "  === FINAL STRESS TEST ===\n";
     auto results = stress.runAllScenarios(portfolio, history.back());
     ste::CsvParser::saveResults("data/stress_results.csv", results);
@@ -277,4 +224,300 @@ int main(int argc, char* argv[]) {
     }
 
     return 0;
+}
+
+// ============================================================
+// Live Mode - Real-time regime detection and execution
+// ============================================================
+int runLive(int port, bool headless, ste::Timeframe timeframe,
+            const std::string& data_source, const std::string& api_key,
+            double initial_capital, bool paper_trade) {
+
+    std::cout << "\n\033[1;36m" << std::string(70, '=') << "\033[0m\n";
+    std::cout << "\033[1;36m  LIVE MODE";
+    if (paper_trade) std::cout << " (PAPER TRADING)";
+    std::cout << "\033[0m\n";
+    std::cout << "\033[1;36m" << std::string(70, '=') << "\033[0m\n\n";
+
+    // --- Live Data Feed ---
+    std::cout << "[*] Initializing live data feed...\n";
+    ste::LiveFeedConfig feed_config;
+    feed_config.api_provider = data_source;
+    feed_config.api_key = api_key;
+    feed_config.timeframe = timeframe;
+
+    // Set poll interval based on timeframe
+    if (timeframe == ste::Timeframe::Minute) {
+        feed_config.poll_interval_ms = 5000;      // 5 seconds
+    } else if (timeframe == ste::Timeframe::Hourly) {
+        feed_config.poll_interval_ms = 60000;     // 1 minute
+    } else {
+        feed_config.poll_interval_ms = 300000;    // 5 minutes for daily
+    }
+
+    ste::LiveDataFeed feed(feed_config);
+
+    // Create appropriate provider
+    if (data_source == "mock") {
+        feed.setProvider(std::make_unique<ste::MockLiveProvider>());
+    }
+    // else: default provider from config (yahoo)
+
+    // --- Regime Detector ---
+    std::cout << "[*] Initializing regime detector (HMM, " << ste::timeframeName(timeframe) << ")...\n";
+    ste::RegimeDetector detector(timeframe);
+
+    // --- Portfolio & Strategy ---
+    std::cout << "[*] Initializing portfolio...\n";
+    ste::Portfolio portfolio;
+    ste::StrategyManager strategy_mgr;
+
+    // --- Stress Engine ---
+    std::cout << "[*] Initializing stress testing engine...\n";
+    ste::StressEngine stress;
+    auto tail_scenarios = ste::ScenarioGenerator::generateTailRisk(10);
+    for (const auto& s : tail_scenarios) stress.addScenario(s);
+
+    // --- Execution Engine ---
+    std::cout << "[*] Initializing execution engine...\n";
+    auto exec_engine = std::make_unique<ste::PaperTradingEngine>(initial_capital);
+    exec_engine->connect();
+
+    ste::OrderManagerConfig order_config;
+    order_config.equity_symbol = "SPY";
+    ste::OrderManager order_mgr(*exec_engine, order_config);
+
+    // --- Web Server ---
+    ste::WebServer server(port);
+    ste::DataBroadcaster broadcaster(server, portfolio, detector, stress);
+
+    if (!headless) {
+        std::cout << "[*] Starting web visualization server...\n";
+        server.start();
+    }
+
+    // --- Main Live Loop State ---
+    ste::MarketRegime last_regime = ste::MarketRegime::BullQuiet;
+    int tick_count = 0;
+    int rebalance_counter = 0;
+    int print_interval = ste::daysToPeriodsCount(1, timeframe); // print every "day equivalent"
+    int rebalance_interval = ste::daysToPeriodsCount(5, timeframe); // rebalance every 5 days
+    ste::MarketSnapshot prev_snapshot{};
+    bool has_prev = false;
+
+    // --- Register data callback ---
+    feed.onData([&](const ste::MarketSnapshot& market) {
+        tick_count++;
+
+        // Update market prices in execution engine
+        exec_engine->updateMarketPrice("SPY", market.spot_price / 10.0);
+        exec_engine->updateMarketPrice("^GSPC", market.spot_price);
+
+        // Regime detection
+        auto regime_state = detector.update(market);
+        auto signal = detector.generateSignal(regime_state, market);
+
+        bool regime_changed = (regime_state.current_regime != last_regime);
+        rebalance_counter++;
+
+        // Portfolio strategy update
+        if (regime_changed || rebalance_counter >= rebalance_interval || tick_count == 1) {
+            auto recommended = strategy_mgr.recommendStrategies(market, regime_state);
+            while (!portfolio.strategies().empty())
+                portfolio.removeStrategy(0);
+            for (const auto& strat : recommended)
+                portfolio.addStrategy(strat);
+            portfolio.setCashAllocation(signal.target_cash_pct);
+            rebalance_counter = 0;
+
+            // Execute trades through execution engine
+            auto batch = order_mgr.processSignal(signal, market, regime_state);
+            if (!batch.orders.empty()) {
+                order_mgr.executeBatch(batch);
+            }
+        }
+
+        // Record returns
+        if (has_prev && prev_snapshot.spot_price > 0) {
+            double spot_ret = (market.spot_price - prev_snapshot.spot_price) / prev_snapshot.spot_price;
+            double prev_value = portfolio.totalValue(prev_snapshot);
+            double port_ret = (prev_value > 0) ?
+                (portfolio.totalValue(market) - prev_value) / prev_value :
+                spot_ret * (1.0 - portfolio.cashAllocation());
+            portfolio.recordReturn(market.timestamp, port_ret, spot_ret);
+        }
+
+        // Print status
+        if (tick_count % print_interval == 0 || regime_changed || tick_count == 1) {
+            if (regime_changed) {
+                std::cout << "\n\033[1;91m  >>> LIVE REGIME CHANGE DETECTED <<<\033[0m\n";
+            }
+
+            std::cout << "\n  Tick " << std::setw(6) << tick_count
+                      << " | SP500: $" << std::fixed << std::setprecision(2) << market.spot_price
+                      << " | VIX: " << std::setprecision(1) << market.vix;
+            printRegime(regime_state);
+            printSignal(signal);
+
+            // Account state from execution engine
+            auto account = exec_engine->accountState();
+            auto port_state = portfolio.computeState(market);
+            std::cout << "  Account: $" << std::setprecision(0) << account.total_equity
+                      << " (Cash: $" << account.cash << ")"
+                      << " | Positions: " << account.positions.size()
+                      << " | Open Orders: " << account.open_orders << "\n";
+            std::cout << "  Portfolio: Return=" << std::setprecision(2)
+                      << port_state.portfolio_return * 100.0 << "%"
+                      << " | Benchmark=" << port_state.benchmark_return * 100.0 << "%"
+                      << " | Alpha=" << (port_state.portfolio_return - port_state.benchmark_return) * 100.0 << "%"
+                      << " | Sharpe=" << port_state.sharpe_ratio << "\n";
+        }
+
+        last_regime = regime_state.current_regime;
+        prev_snapshot = market;
+        has_prev = true;
+
+        // Broadcast to web dashboard
+        if (!headless) {
+            broadcaster.broadcast(market);
+        }
+    });
+
+    // --- Start Feed ---
+    std::cout << "\n[*] Starting live data feed...\n";
+    if (!feed.start()) {
+        std::cerr << "[!] Failed to start live data feed. Aborting.\n";
+        return 1;
+    }
+
+    std::cout << "\n\033[1;32m[*] LIVE MODE ACTIVE - Press Ctrl+C to stop.\033[0m\n";
+    if (!headless) {
+        std::cout << "[*] Dashboard: http://localhost:" << port << "\n";
+    }
+    std::cout << std::string(70, '=') << "\n\n";
+
+    // --- Keep running ---
+    while (g_running.load()) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+
+        // Periodic feed health check
+        auto stats = feed.stats();
+        if (!stats.connected && stats.errors > 5) {
+            std::cerr << "\n[!] Feed disconnected with " << stats.errors << " errors.\n";
+        }
+    }
+
+    // --- Shutdown ---
+    std::cout << "\n\n[*] Shutting down live mode...\n";
+    feed.stop();
+
+    // Print final execution summary
+    auto final_account = exec_engine->accountState();
+    auto paper_stats = exec_engine->paperStats();
+    auto final_port = portfolio.computeState(prev_snapshot);
+
+    std::cout << "\n  === LIVE SESSION RESULTS ===\n"
+              << "  Ticks Processed:   " << tick_count << "\n"
+              << "  Account Equity:    $" << std::fixed << std::setprecision(0) << final_account.total_equity << "\n"
+              << "  P&L:               $" << std::setprecision(2) << paper_stats.total_pnl << "\n"
+              << "  Total Trades:      " << paper_stats.total_trades << "\n"
+              << "  Win Rate:          " << std::setprecision(1) << paper_stats.win_rate * 100.0 << "%\n"
+              << "  Portfolio Return:  " << std::setprecision(2) << final_port.portfolio_return * 100.0 << "%\n"
+              << "  Benchmark Return:  " << final_port.benchmark_return * 100.0 << "%\n"
+              << "  Alpha:             " << (final_port.portfolio_return - final_port.benchmark_return) * 100.0 << "%\n"
+              << "  Regime Changes:    " << detector.regimeHistory().size() << "\n\n";
+
+    // Trade log
+    const auto& trade_log = order_mgr.tradeLog();
+    if (!trade_log.empty()) {
+        std::cout << "  === TRADE LOG ===\n";
+        for (const auto& t : trade_log) {
+            std::cout << "  " << t.action << " | $" << std::setprecision(0) << t.amount
+                      << " | " << t.reason << "\n";
+        }
+    }
+
+    exec_engine->disconnect();
+
+    if (!headless) {
+        server.stop();
+    }
+
+    return 0;
+}
+
+// ============================================================
+// Main Entry Point
+// ============================================================
+int main(int argc, char* argv[]) {
+    std::signal(SIGINT, signalHandler);
+    std::signal(SIGTERM, signalHandler);
+
+    printBanner();
+
+    // Configuration
+    int port = 8080;
+    int sim_days = 756;
+    int speed_ms = 100;
+    double initial_price = 4500.0;
+    double initial_capital = 1000000.0;
+    bool headless = false;
+    bool live_mode = false;
+    bool paper_trade = true;
+    std::string data_source = "mock";   // "yahoo", "mock"
+    std::string api_key;
+    ste::Timeframe timeframe = ste::Timeframe::Daily;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--port" && i + 1 < argc) port = std::stoi(argv[++i]);
+        else if (arg == "--days" && i + 1 < argc) sim_days = std::stoi(argv[++i]);
+        else if (arg == "--speed" && i + 1 < argc) speed_ms = std::stoi(argv[++i]);
+        else if (arg == "--price" && i + 1 < argc) initial_price = std::stod(argv[++i]);
+        else if (arg == "--capital" && i + 1 < argc) initial_capital = std::stod(argv[++i]);
+        else if (arg == "--timeframe" && i + 1 < argc) {
+            std::string tf = argv[++i];
+            if (tf == "hourly" || tf == "1h") timeframe = ste::Timeframe::Hourly;
+            else if (tf == "minute" || tf == "1m") timeframe = ste::Timeframe::Minute;
+            else timeframe = ste::Timeframe::Daily;
+        }
+        else if (arg == "--live") live_mode = true;
+        else if (arg == "--data-source" && i + 1 < argc) data_source = argv[++i];
+        else if (arg == "--api-key" && i + 1 < argc) api_key = argv[++i];
+        else if (arg == "--paper") paper_trade = true;
+        else if (arg == "--headless") headless = true;
+        else if (arg == "--help") {
+            std::cout << "Usage: stress_engine [options]\n\n"
+                      << "  MODES:\n"
+                      << "    (default)           Simulation/backtest mode\n"
+                      << "    --live              Live mode with real-time regime detection\n\n"
+                      << "  SIMULATION OPTIONS:\n"
+                      << "    --days <N>          Simulation days (default: 756)\n"
+                      << "    --speed <ms>        Speed between frames (default: 100)\n"
+                      << "    --price <N>         Initial SP500 price (default: 4500)\n\n"
+                      << "  LIVE OPTIONS:\n"
+                      << "    --data-source <s>   Data source: mock, yahoo (default: mock)\n"
+                      << "    --api-key <key>     API key for data provider\n"
+                      << "    --capital <N>       Initial capital (default: 1000000)\n"
+                      << "    --paper             Paper trading mode (default: on)\n\n"
+                      << "  COMMON OPTIONS:\n"
+                      << "    --port <N>          Web server port (default: 8080)\n"
+                      << "    --timeframe <tf>    daily, hourly/1h, minute/1m (default: daily)\n"
+                      << "    --headless          Run without web server\n"
+                      << "    --help              Show this help\n\n"
+                      << "  EXAMPLES:\n"
+                      << "    stress_engine                           # Backtest simulation\n"
+                      << "    stress_engine --live --data-source mock # Live with mock data\n"
+                      << "    stress_engine --live --data-source yahoo --timeframe 1m\n"
+                      << "    stress_engine --live --headless         # Live, console only\n";
+            return 0;
+        }
+    }
+
+    if (live_mode) {
+        return runLive(port, headless, timeframe, data_source, api_key,
+                       initial_capital, paper_trade);
+    } else {
+        return runSimulation(port, sim_days, speed_ms, initial_price, headless, timeframe);
+    }
 }

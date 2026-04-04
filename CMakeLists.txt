@@ -32,6 +32,8 @@ set(ENGINE_SOURCES
     src/core/arima.cpp
     src/core/backtester.cpp
     src/core/statistical_tests.cpp
+    src/live/live_data_feed.cpp
+    src/execution/execution_engine.cpp
 )
 
 # Main library
