@@ -68,6 +68,8 @@ std::string JsonWriter::toJson(const PortfolioState& s) {
        << ",\"var95\":" << fmtd(s.var_95)
        << ",\"cvar95\":" << fmtd(s.cvar_95)
        << ",\"sharpe\":" << fmtd(s.sharpe_ratio)
+       << ",\"sortino\":" << fmtd(s.sortino_ratio)
+       << ",\"calmar\":" << fmtd(s.calmar_ratio)
        << ",\"maxDrawdown\":" << fmtd(s.max_drawdown)
        << ",\"portfolioReturn\":" << fmtd(s.portfolio_return)
        << ",\"benchmarkReturn\":" << fmtd(s.benchmark_return) << "}";

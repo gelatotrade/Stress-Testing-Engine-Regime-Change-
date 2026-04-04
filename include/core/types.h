@@ -150,6 +150,8 @@ struct PortfolioState {
     double var_95;              // Value at Risk 95%
     double cvar_95;             // Conditional VaR
     double sharpe_ratio;
+    double sortino_ratio;
+    double calmar_ratio;
     double max_drawdown;
     double benchmark_return;    // SP500 cumulative
     double portfolio_return;    // our cumulative

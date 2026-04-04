@@ -45,6 +45,8 @@ public:
     // Track returns over time
     void recordReturn(double timestamp, double portfolio_ret, double benchmark_ret);
     double sharpeRatio() const;
+    double sortinoRatio() const;
+    double calmarRatio() const;
     double maxDrawdown() const;
     double cumulativeReturn() const;
     double benchmarkReturn() const;
