@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""
+Generate a combined dashboard GIF:
+  Left:  S&P 500 benchmark vs Strategy performance chart over time
+  Right: 3D regime change surface (synchronized)
+
+Both panels evolve together — as the chart progresses through regimes,
+the 3D surface morphs in sync. Fully continuous smooth transitions.
+"""
+import matplotlib
+matplotlib.use('Agg')
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+import matplotlib.gridspec as gridspec
+import io
+from PIL import Image
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Style
+# ---------------------------------------------------------------------------
+BG   = '#0a0a0a'
+BG2  = '#111118'
+TEXT = '#cccccc'
+GREEN  = '#00ff88'
+RED    = '#ff3344'
+YELLOW = '#ffaa00'
+BLUE   = '#00aaff'
+CYAN   = '#00ffcc'
+GRID_C = '#222233'
+DIM    = '#444466'
+
+# Diverging colormaps per regime
+CMAP_BULL = LinearSegmentedColormap.from_list('bull', [
+    '#0000aa', '#0055cc', '#22aa66', '#00ff88', '#eeffaa', '#ffffdd'])
+CMAP_TRANS = LinearSegmentedColormap.from_list('trans', [
+    '#440066', '#8833aa', '#cc7700', '#ffaa00', '#ffdd44', '#ffffcc'])
+CMAP_CRISIS = LinearSegmentedColormap.from_list('crisis', [
+    '#000044', '#220066', '#660088', '#cc0022', '#ff4444', '#ffcc44'])
+CMAP_RECOV = LinearSegmentedColormap.from_list('recov', [
+    '#330044', '#553388', '#0066aa', '#00ccee', '#66ffcc', '#eeffee'])
+REGIME_CMAPS = [CMAP_BULL, CMAP_TRANS, CMAP_CRISIS, CMAP_RECOV, CMAP_BULL]
+
+OUT_DIR = Path(__file__).resolve().parent.parent / 'docs' / 'img'
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+DPI = 150
+TOTAL_FRAMES = 120
+
+# ---------------------------------------------------------------------------
+# Performance data (same as performance_vs_sp500 chart)
+# ---------------------------------------------------------------------------
+np.random.seed(42)
+DAYS = 756
+
+regime_bounds = [0, 180, 240, 340, 460, DAYS]
+regime_names  = ['Bull Quiet', 'Transition', 'Bear Volatile', 'Recovery', 'New Bull']
+regime_colors = [GREEN, YELLOW, RED, CYAN, GREEN]
+regime_drifts = [0.0005, -0.0002, -0.0028, 0.0015, 0.0006]
+regime_vols   = [0.008, 0.014, 0.032, 0.016, 0.009]
+
+sp_ret = np.zeros(DAYS)
+for i in range(len(regime_names)):
+    a, b = regime_bounds[i], regime_bounds[i + 1]
+    sp_ret[a:b] = np.random.normal(regime_drifts[i], regime_vols[i], b - a)
+sp_cum = np.cumprod(1 + sp_ret) - 1
+
+port_ret = sp_ret.copy()
+port_ret[180:240] = sp_ret[180:240] * 0.4 + 0.0003
+port_ret[240:340] = sp_ret[240:340] * 0.18 + 0.0005
+port_ret[340:460] = sp_ret[340:460] * 1.3 + 0.0003
+port_ret[460:]    = sp_ret[460:] * 1.1 + 0.0002
+port_cum = np.cumprod(1 + port_ret) - 1
+
+# Trade markers
+trade_days   = [0, 180, 240, 340, 460]
+trade_labels = ['BUY 892 SPY', 'SELL 446', 'SELL 357 (hedge)', 'BUY 663', 'BUY 224']
+trade_colors = [GREEN, RED, RED, GREEN, GREEN]
+
+# ---------------------------------------------------------------------------
+# 3D regime surfaces
+# ---------------------------------------------------------------------------
+n_grid = 50
+spot = np.linspace(78, 122, n_grid)
+ivol = np.linspace(8, 58, n_grid)
+X, Y = np.meshgrid(spot, ivol)
+
+def _bull(X, Y):
+    return 28 - 0.014 * (X - 100)**2 - 0.006 * (Y - 16)**2
+
+def _transition(X, Y):
+    base = 10 - 0.010 * (X - 100)**2 - 0.005 * (Y - 28)**2
+    return base + 6 * np.sin(0.4 * X) * np.cos(0.3 * Y)
+
+def _crisis(X, Y):
+    crater = -10 * np.exp(-0.015 * ((X - 88)**2 + (Y - 52)**2))
+    return -22 + 0.007 * (X - 92)**2 + 0.004 * (Y - 50)**2 + crater
+
+def _recovery(X, Y):
+    return 16 - 0.008 * (X - 100)**2 - 0.005 * (Y - 30)**2
+
+surfaces = [_bull, _transition, _crisis, _recovery, _bull]
+elevations = [30, 26, 20, 28, 30]
+n_reg = len(surfaces)
+
+# Map day -> continuous regime parameter t in [0, n_reg-1]
+# regime_bounds: [0, 180, 240, 340, 460, 756]
+# We map day d to t such that at each regime boundary center we are at the keyframe
+regime_centers = [90, 210, 290, 400, 608]  # midpoints of each regime period
+
+
+def day_to_regime_t(d):
+    """Map day number to continuous regime parameter."""
+    for i in range(len(regime_bounds) - 1):
+        if d < regime_bounds[i + 1]:
+            local = (d - regime_bounds[i]) / (regime_bounds[i + 1] - regime_bounds[i])
+            return i + local
+    return n_reg - 1
+
+
+def smoothstep(t):
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
+
+
+def blend_cmap(cmap_a, cmap_b, bt, z_norm):
+    return cmap_a(z_norm) * (1 - bt) + cmap_b(z_norm) * bt
+
+
+def fig_to_img(fig, w=1800, h=820):
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=DPI, facecolor=fig.get_facecolor(),
+                edgecolor='none', bbox_inches='tight', pad_inches=0.2)
+    buf.seek(0)
+    img = Image.open(buf).convert('RGBA').resize((w, h), Image.LANCZOS)
+    return img
+
+
+def save_gif(frames, path, duration=120):
+    rgb = []
+    for f in frames:
+        bg = Image.new('RGB', f.size, (10, 10, 10))
+        bg.paste(f, mask=f.split()[3])
+        rgb.append(bg)
+    rgb[0].save(path, save_all=True, append_images=rgb[1:],
+                duration=duration, loop=0, optimize=True)
+    print(f'  Saved {path}  ({len(rgb)} frames, {path.stat().st_size / 1024:.0f} KB)')
+
+
+# ---------------------------------------------------------------------------
+# Generate frames
+# ---------------------------------------------------------------------------
+print('Generating combined_dashboard.gif ...')
+day_indices = np.linspace(5, DAYS, TOTAL_FRAMES, dtype=int)
+
+frames = []
+for fi, d in enumerate(day_indices):
+    fig = plt.figure(figsize=(20, 8.5), facecolor=BG)
+
+    # Layout: title row + [chart | 3D surface]
+    gs_outer = gridspec.GridSpec(2, 1, height_ratios=[0.6, 9], hspace=0.08,
+                                 figure=fig)
+
+    # --- Title bar ---
+    ax_title = fig.add_subplot(gs_outer[0])
+    ax_title.set_facecolor(BG)
+    ax_title.axis('off')
+
+    # Current regime
+    cur_regime = 0
+    for ri in range(len(regime_names)):
+        if d >= regime_bounds[ri]:
+            cur_regime = ri
+    rc = regime_colors[cur_regime]
+    rn = regime_names[cur_regime]
+
+    port_pct = port_cum[d - 1] * 100 if d > 0 else 0
+    sp_pct = sp_cum[d - 1] * 100 if d > 0 else 0
+    alpha_pct = port_pct - sp_pct
+
+    ax_title.text(0.5, 0.55,
+                  f'\u25cf LIVE  |  Day {d}/{DAYS}  |  Regime: {rn}  |  '
+                  f'Portfolio: {port_pct:+.1f}%  |  S&P 500: {sp_pct:+.1f}%  |  '
+                  f'Alpha: {alpha_pct:+.1f}%',
+                  color=rc, fontsize=14, fontweight='bold', ha='center', va='center',
+                  transform=ax_title.transAxes, family='monospace')
+
+    # --- Bottom row: chart left, 3D right ---
+    gs_bottom = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=gs_outer[1],
+                                                  width_ratios=[1.1, 1], wspace=0.08)
+
+    # ===== LEFT: Performance chart =====
+    gs_left = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec=gs_bottom[0],
+                                                height_ratios=[3, 1.2], hspace=0.3)
+
+    # -- Main return chart --
+    ax_r = fig.add_subplot(gs_left[0])
+    ax_r.set_facecolor(BG2)
+    ax_r.grid(True, color=GRID_C, alpha=0.3, linewidth=0.5)
+    for spine in ax_r.spines.values():
+        spine.set_color(GRID_C)
+    ax_r.tick_params(colors=DIM, labelsize=7)
+    ax_r.set_ylabel('Cumulative Return (%)', color=DIM, fontsize=9)
+    ax_r.set_xlim(0, DAYS)
+    y_lo = min(sp_cum.min(), port_cum.min()) * 105
+    y_hi = max(sp_cum.max(), port_cum.max()) * 135
+    ax_r.set_ylim(y_lo, y_hi)
+
+    # Regime background bands
+    for ri in range(len(regime_names)):
+        a, b = regime_bounds[ri], min(regime_bounds[ri + 1], d)
+        if a < d:
+            ax_r.axvspan(a, b, color=regime_colors[ri], alpha=0.06)
+            if b - a > 40:
+                ax_r.text((a + b) / 2, y_hi * 0.88, regime_names[ri],
+                          color=regime_colors[ri], fontsize=6, ha='center',
+                          alpha=0.6, family='monospace')
+
+    x = np.arange(d)
+    ax_r.plot(x, sp_cum[:d] * 100, color=RED, linewidth=1.5, alpha=0.7, label='S&P 500')
+    ax_r.fill_between(x, 0, sp_cum[:d] * 100, color=RED, alpha=0.04)
+    ax_r.plot(x, port_cum[:d] * 100, color=GREEN, linewidth=2.5, label='Strategy')
+    ax_r.fill_between(x, 0, port_cum[:d] * 100, color=GREEN, alpha=0.07)
+
+    # Trade markers
+    for ti, td in enumerate(trade_days):
+        if 0 < td < d:
+            ax_r.axvline(td, color=trade_colors[ti], linestyle='--', alpha=0.4, linewidth=0.8)
+            y_pos = y_hi * 0.78 - (ti % 3) * 4
+            ax_r.annotate(trade_labels[ti], xy=(td, port_cum[td] * 100),
+                          xytext=(td + 15, y_pos),
+                          color=trade_colors[ti], fontsize=5.5,
+                          fontfamily='monospace', alpha=0.8,
+                          arrowprops=dict(arrowstyle='->', color=trade_colors[ti], alpha=0.3))
+
+    ax_r.axhline(0, color=DIM, linewidth=0.6, linestyle='--', alpha=0.4)
+    ax_r.legend(fontsize=8, loc='upper left', facecolor=BG2,
+                edgecolor=GRID_C, labelcolor=TEXT)
+
+    # Current day marker
+    if d > 1:
+        ax_r.axvline(d, color='white', linewidth=1.2, alpha=0.6, linestyle=':')
+
+    # -- Drawdown chart --
+    port_peak = np.maximum.accumulate(1 + port_cum[:d])
+    port_dd = (port_peak - (1 + port_cum[:d])) / port_peak
+    sp_peak = np.maximum.accumulate(1 + sp_cum[:d])
+    sp_dd = (sp_peak - (1 + sp_cum[:d])) / sp_peak
+
+    ax_dd = fig.add_subplot(gs_left[1])
+    ax_dd.set_facecolor(BG2)
+    ax_dd.grid(True, color=GRID_C, alpha=0.3, linewidth=0.5)
+    for spine in ax_dd.spines.values():
+        spine.set_color(GRID_C)
+    ax_dd.tick_params(colors=DIM, labelsize=6)
+    ax_dd.set_xlabel('Trading Day', color=DIM, fontsize=8)
+    ax_dd.set_ylabel('Drawdown (%)', color=DIM, fontsize=8)
+    ax_dd.set_xlim(0, DAYS)
+
+    max_dd = max(sp_dd.max(), port_dd.max()) if d > 1 else 0.01
+    ax_dd.set_ylim(-max_dd * 130, 2)
+
+    ax_dd.fill_between(x, -sp_dd * 100, color=RED, alpha=0.25, label='S&P 500')
+    ax_dd.fill_between(x, -port_dd * 100, color=GREEN, alpha=0.25, label='Strategy')
+    ax_dd.plot(x, -sp_dd * 100, color=RED, linewidth=0.8, alpha=0.6)
+    ax_dd.plot(x, -port_dd * 100, color=GREEN, linewidth=1.2)
+    ax_dd.axhline(0, color=DIM, linewidth=0.4)
+    ax_dd.legend(fontsize=6, loc='lower left', facecolor=BG2,
+                 edgecolor=GRID_C, labelcolor=TEXT)
+
+    # ===== RIGHT: 3D Regime Surface =====
+    ax3d = fig.add_subplot(gs_bottom[1], projection='3d')
+    ax3d.set_facecolor(BG)
+    ax3d.xaxis.pane.fill = False
+    ax3d.yaxis.pane.fill = False
+    ax3d.zaxis.pane.fill = False
+    ax3d.xaxis.pane.set_edgecolor('#1a1a2e')
+    ax3d.yaxis.pane.set_edgecolor('#1a1a2e')
+    ax3d.zaxis.pane.set_edgecolor('#1a1a2e')
+    ax3d.grid(True, color='#223344', alpha=0.2)
+    ax3d.tick_params(colors='#556677', labelsize=6)
+
+    # Continuous regime interpolation synced to chart day
+    t = day_to_regime_t(d)
+    t = min(t, n_reg - 1 - 1e-6)
+    ri_a = min(int(t), n_reg - 2)
+    ri_b = ri_a + 1
+    bt = smoothstep(t - ri_a)
+
+    Z_a = surfaces[ri_a](X, Y)
+    Z_b = surfaces[ri_b](X, Y)
+    Z = Z_a * (1 - bt) + Z_b * bt
+
+    z_min, z_max = Z.min(), Z.max()
+    z_range = z_max - z_min if z_max > z_min else 1.0
+    z_norm = (Z - z_min) / z_range
+    face_colors = blend_cmap(REGIME_CMAPS[ri_a], REGIME_CMAPS[ri_b], bt, z_norm)
+
+    ax3d.plot_surface(X, Y, Z, facecolors=face_colors, alpha=0.92,
+                      rstride=1, cstride=1, edgecolor='none',
+                      antialiased=True, shade=True)
+
+    ax3d.plot_wireframe(X[::4, ::4], Y[::4, ::4], Z[::4, ::4],
+                        color='white', alpha=0.05, linewidth=0.3)
+
+    z_floor = z_min - z_range * 0.15
+    try:
+        ax3d.contour(X, Y, Z, levels=np.linspace(z_min, z_max, 8),
+                     zdir='z', offset=z_floor, cmap=REGIME_CMAPS[ri_a],
+                     alpha=0.3, linewidths=0.5)
+    except Exception:
+        pass
+
+    ax3d.set_zlim(z_floor, z_max + z_range * 0.1)
+    ax3d.set_xlabel('Spot ($)', color='#667788', fontsize=8, labelpad=6)
+    ax3d.set_ylabel('Vol (%)', color='#667788', fontsize=8, labelpad=6)
+    ax3d.set_zlabel('P&L ($K)', color='#667788', fontsize=8, labelpad=6)
+
+    elev = elevations[ri_a] * (1 - bt) + elevations[ri_b] * bt
+    azim = 215 + fi * 1.5
+    ax3d.view_init(elev=elev, azim=azim)
+
+    ax3d.set_title(f'Regime: {rn}\nP&L Surface',
+                   color=rc, fontsize=11, fontweight='bold',
+                   fontfamily='monospace', pad=8)
+
+    frames.append(fig_to_img(fig, 1800, 820))
+    plt.close(fig)
+    print(f'  Frame {fi + 1}/{TOTAL_FRAMES}')
+
+save_gif(frames, OUT_DIR / 'combined_dashboard.gif', duration=120)
+print('\nDone.')

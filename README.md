@@ -103,6 +103,30 @@ Watch the 3D P&L surface **morph continuously** as the engine cycles through all
 
 ---
 
+### Combined Dashboard: Strategy vs. S&P 500 + 3D Regime Surface
+
+The **side-by-side dashboard** shows the performance chart (left) and 3D regime surface (right) **synchronized in real-time**. As the chart progresses through trading days and regime changes, the 3D surface morphs in sync — you can see the surface shift from a smooth green dome to a red crater exactly as the drawdown hits the chart. 120 frames, fully continuous smooth transitions.
+
+![Combined Dashboard Animation](docs/img/combined_dashboard.gif)
+
+**Left panel:**
+- **Green line**: Strategy portfolio cumulative return
+- **Red line**: S&P 500 benchmark cumulative return
+- **Colored bands**: Regime periods (green/yellow/red/cyan)
+- **Trade markers**: Execution engine buy/sell actions with arrows
+- **White dotted line**: Current day cursor
+- **Lower chart**: Drawdown comparison — strategy vs. S&P 500
+
+**Right panel:**
+- **3D P&L surface** morphing in sync with the chart timeline
+- **Diverging colormap** blending between regimes (blue valleys, green/red/gold peaks)
+- **Wireframe + contour floor** for depth perception
+- **Camera** elevation shifts per regime (30° bull → 20° crisis → 30° recovery)
+
+**How they connect:** When the chart enters the Bear Volatile regime (day 240-340), the 3D surface simultaneously inverts into a deep red crater. When the strategy re-enters at the Recovery (day 340+), the surface reforms into an upward slope. The alpha (green above red) on the chart maps directly to the surface height difference.
+
+---
+
 ### Live Performance vs. S&P 500 with Execution Engine Trades
 
 The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmark (red) over a full cycle at **1400x820** resolution, **150 DPI**. Trade markers show exactly when the execution engine acted. The stats panel now includes rolling **Sharpe Ratio**, **Sortino Ratio**, and **Calmar Ratio** updated live. The engine **avoids the crash** by selling before the drawdown, then **re-enters aggressively** at the bottom.
@@ -360,6 +384,7 @@ pip install matplotlib numpy Pillow
 python3 scripts/generate_visualizations.py      # 4 GIFs: regime_cycle_3d, early_warning, stress_test, transition_heatmap
 python3 scripts/gen_regime_3d.py                 # 1 GIF: regime_cycle_3d (Black-Scholes based, 90 frames)
 python3 scripts/generate_extra_visualizations.py # 2 GIFs: regime_phases_comparison, performance_vs_sp500
+python3 scripts/gen_combined_dashboard.py        # 1 GIF: combined_dashboard (chart + 3D side-by-side)
 ```
 
 ### CLI Options
