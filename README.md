@@ -1,6 +1,6 @@
 # Stress Testing Engine with Regime Change Detection
 
-A high-performance C++ engine for **live** and **backtest** stress testing of options portfolio strategies. Features real-time 3D visualization, Hidden Markov Model regime detection, an execution engine for automated trading, and early warning signals for optimal risk allocation vs. S&P 500 benchmark.
+A high-performance C++ engine for **live** and **backtest** stress testing of options portfolio strategies. Features high-quality real-time 3D visualization (150 DPI, 60x60 grid, per-regime colormaps, wireframe overlays, contour floor projections), Hidden Markov Model regime detection, an execution engine for automated trading, and early warning signals for optimal risk allocation vs. S&P 500 benchmark.
 
 **The engine runs in two modes:**
 - **Live Mode** (`--live`): Connects to real-time market data, detects regime changes as they happen, and automatically executes trades through the execution engine to outperform the S&P 500
@@ -8,13 +8,13 @@ A high-performance C++ engine for **live** and **backtest** stress testing of op
 
 ---
 
-## Live 3D Regime Change Visualization
+## Live 3D Regime Change Visualization (High Quality)
 
-The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Volatility x P&L) that **morphs in real-time** as market regimes shift. In live mode, the surface updates tick-by-tick from the live data feed while the execution engine automatically rebalances positions.
+The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Volatility x P&L) that **morphs in real-time** as market regimes shift. All 3D visualizations render at **150 DPI** on a **55-60 point grid** with **per-regime colormaps**, **wireframe depth overlays**, and **contour floor projections** for maximum clarity of regime transitions. In live mode, the surface updates tick-by-tick from the live data feed while the execution engine automatically rebalances positions.
 
 ### P&L Surface Morphing Through Live Regime Detection
 
-> The 3D surface rotates and deforms live as the HMM detects regime transitions: **Bull Quiet** (green) --> **Transition** (yellow/orange) --> **Bear Volatile / Crisis** (red) --> **Recovery** (blue) --> **New Bull** (green). The execution engine trades are shown in real-time.
+> The 3D surface rotates and deforms live as the HMM detects regime transitions: **BULL QUIET** (green gradient) --> **TRANSITION** (amber/orange gradient) --> **BEAR VOLATILE / CRISIS** (red gradient with deep crater) --> **RECOVERY** (blue gradient) --> **NEW BULL** (green gradient). Each regime uses a dedicated high-contrast colormap. Wireframe overlay adds depth perception. Contour lines project onto the floor plane. Camera elevation shifts per regime (lower during crisis for dramatic effect). 16-18 frames per regime for smooth transitions. The execution engine trades are shown in real-time.
 
 ![3D P&L Surface - Live Regime Cycle](docs/img/regime_cycle_3d.gif)
 
@@ -22,17 +22,19 @@ The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Vola
 - **X-Axis**: Spot Price ($) -- the underlying S&P 500 level from live feed
 - **Y-Axis**: Implied Volatility (%) -- option-implied expected volatility (VIX)
 - **Z-Axis**: P&L ($) -- portfolio profit/loss from Iron Condor strategy
-- **Color**: Green = profit zone, Red = loss zone, shifting with live regime
-- **Bottom bar**: Regime timeline progressing through the full cycle
+- **Color**: Per-regime colormap (green gradient = bull, amber = transition, red = crisis, blue = recovery)
+- **Wireframe**: White semi-transparent wireframe overlay every 4th grid line for depth perception
+- **Floor contours**: 8-level contour projection on the Z-floor showing P&L topology
+- **Camera**: Variable elevation (30° bull, 20° crisis) with continuous azimuth rotation
 - **Header**: LIVE indicator, current regime, execution engine trades, VIX level
 
-| Phase | Surface Shape | VIX | Signal | Execution Action | Cash |
-|-------|--------------|-----|--------|-----------------|------|
-| Bull Quiet | Smooth elevated dome | ~12 | STRONG BUY | BUY 892 SPY | 15% |
-| Transition | Rippling, tilting surface | ~24 | REDUCE RISK | SELL 446 SPY | 40% |
-| Bear Volatile | Inverted crater, deep valleys | ~67 | CRISIS | SELL 357 SPY | 70% |
-| Recovery | Reforming upward slope | ~28 | BUY | BUY 663 SPY | 25% |
-| New Bull | Smooth dome returns | ~14 | STRONG BUY | BUY 224 SPY | 15% |
+| Phase | Surface Shape | Colormap | Camera | VIX | Signal | Execution Action | Cash |
+|-------|--------------|----------|--------|-----|--------|-----------------|------|
+| Bull Quiet | Smooth elevated dome (+28 P&L peak) | Green gradient (#003310→#ccffee) | 30° elev | ~12 | STRONG BUY | BUY 892 SPY | 15% |
+| Transition | Rippling surface with 6x sine·cos waves | Amber gradient (#331100→#ffee88) | 26° elev | ~24 | REDUCE RISK | SELL 446 SPY | 40% |
+| Bear Volatile | Inverted crater (-22 base, -10 Gaussian dip) | Red gradient (#110000→#ff8866) | 20° elev | ~67 | CRISIS | SELL 357 SPY | 70% |
+| Recovery | Reforming upward slope (-8→+16) | Blue gradient (#001133→#88ddff) | 28° elev | ~28 | BUY | BUY 663 SPY | 25% |
+| New Bull | Smooth dome returns (+26 peak) | Green gradient | 30° elev | ~14 | STRONG BUY | BUY 224 SPY | 15% |
 
 ---
 
@@ -81,22 +83,22 @@ The Hidden Markov Model's **5x5 transition probability matrix** shows the likeli
 
 ## How the 3D Coordinate System Changes Per Regime
 
-Watch the 3D P&L surface **morph in real-time** as the engine cycles through all 5 market regimes. Each regime shows the execution engine's live trade actions and account state.
+Watch the 3D P&L surface **morph in real-time** as the engine cycles through all 5 market regimes. Each regime renders with its own high-contrast colormap, wireframe overlay for depth, floor contour projections, and variable camera elevation (lower during crisis for dramatic perspective). 16 frames per phase, 55-point grid, 150 DPI. Each regime shows the execution engine's live trade actions and account state.
 
 ![3D Regime Phase Comparison Animation](docs/img/regime_phases_comparison.gif)
 
 **What changes per regime:**
-- **Bull Quiet**: Smooth green dome -- `BUY 892 SPY @ $528.04` -- full risk, Account: $1,000,000
-- **Transition**: Surface rippling -- `SELL 446 SPY @ $505.12` -- reducing exposure, Account: $987,420
-- **Bear Volatile**: Deep red crater -- `SELL 357 SPY @ $391.88` -- crisis hedge, Account: $932,180
-- **Recovery**: Reforming upward -- `BUY 663 SPY @ $450.22` -- re-entering at bottom, Account: $961,540
-- **New Bull**: Smooth green dome -- `BUY 224 SPY @ $560.15` -- full exposure, Account: $1,148,920
+- **Bull Quiet**: Smooth green dome (green gradient #003310→#ccffee, 30° camera) -- `BUY 892 SPY @ $528.04` -- full risk, Account: $1,000,000
+- **Transition**: Surface rippling with growing sine·cos waves (amber gradient, 26° camera) -- `SELL 446 SPY @ $505.12` -- reducing exposure, Account: $987,420
+- **Bear Volatile**: Deep red crater with Gaussian dip (red gradient, 20° camera) -- `SELL 357 SPY @ $391.88` -- crisis hedge, Account: $932,180
+- **Recovery**: Reforming upward slope (blue gradient, 28° camera) -- `BUY 663 SPY @ $450.22` -- re-entering at bottom, Account: $961,540
+- **New Bull**: Smooth green dome returns (green gradient, 30° camera) -- `BUY 224 SPY @ $560.15` -- full exposure, Account: $1,148,920
 
 ---
 
 ### Live Performance vs. S&P 500 with Execution Engine Trades
 
-The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmark (red) over a full cycle. Trade markers show exactly when the execution engine acted. The engine **avoids the crash** by selling before the drawdown, then **re-enters aggressively** at the bottom.
+The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmark (red) over a full cycle at **1400x820** resolution, **150 DPI**. Trade markers show exactly when the execution engine acted. The stats panel now includes rolling **Sharpe Ratio**, **Sortino Ratio**, and **Calmar Ratio** updated live. The engine **avoids the crash** by selling before the drawdown, then **re-enters aggressively** at the bottom.
 
 ![Performance vs S&P 500 Animation](docs/img/performance_vs_sp500.gif)
 
@@ -105,6 +107,7 @@ The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmar
 - **Day 240-340 (Crisis)**: Portfolio holds 70% cash while S&P drops -- drawdown limited to ~8% vs ~35%
 - **Day 340-460 (Recovery)**: Execution engine buys `663 SPY`, capturing the V-shaped recovery
 - **Day 460+ (New Bull)**: Full exposure with options premium income, alpha compounds
+- **Stats panel**: Live Sharpe, Sortino, Calmar ratios + return, max drawdown, alpha, trade count
 - **Lower panel**: Drawdown comparison -- engine's max drawdown is a fraction of the benchmark's
 
 ---
@@ -170,12 +173,18 @@ The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmar
 - **Purged k-fold cross-validation** to prevent overfitting
 - **ARIMA-GARCH** data generation for realistic backtests
 
-### 3D Live Visualization Dashboard
+### 3D Live Visualization Dashboard (High Quality)
 - **Real-time 3D P&L surface** (Spot x Volatility x P&L) using Three.js/WebGL
-- **Regime change timeline** with color-coded history
+- **150 DPI rendering** with 55-60 point grids for smooth surfaces
+- **Per-regime colormaps**: dedicated green/amber/red/blue gradients for each regime
+- **Wireframe overlay**: semi-transparent white wireframe every 4th grid line for depth
+- **Contour floor projections**: 8-level contour lines projected onto Z-floor
+- **Variable camera elevation**: 30° bull, 26° transition, 20° crisis, 28° recovery
+- **16-18 frames per regime phase** for smooth morphing transitions
+- **Regime change timeline** with color-coded active marker
 - **Trading signal display** with allocation bars
 - **Stress test results table**
-- **Portfolio metrics panel**: Value, Return, Alpha, Sharpe, Max Drawdown, Greeks
+- **Portfolio metrics panel**: Value, Return, Alpha, Sharpe, Sortino, Calmar, Max Drawdown, Greeks
 - **Early warning progress bar**
 - **Regime probability distribution** bars
 - Auto-rotating 3D camera with orbit controls
@@ -337,12 +346,13 @@ make -j$(nproc)
 ./build/stress_engine --headless --days 500 --speed 0
 ```
 
-### Regenerate Visualization GIFs
+### Regenerate Visualization GIFs (High Quality)
+All scripts render at 150 DPI with high-resolution grids (55-60 pts), per-regime colormaps, wireframe overlays, and contour projections.
 ```bash
 pip install matplotlib numpy Pillow
-python3 scripts/generate_visualizations.py
-python3 scripts/gen_regime_3d.py
-python3 scripts/generate_extra_visualizations.py
+python3 scripts/generate_visualizations.py      # 4 GIFs: regime_cycle_3d, early_warning, stress_test, transition_heatmap
+python3 scripts/gen_regime_3d.py                 # 1 GIF: regime_cycle_3d (Black-Scholes based, 90 frames)
+python3 scripts/generate_extra_visualizations.py # 2 GIFs: regime_phases_comparison, performance_vs_sp500
 ```
 
 ### CLI Options
