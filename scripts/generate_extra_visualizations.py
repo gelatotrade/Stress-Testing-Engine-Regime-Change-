@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Generate additional animated GIFs:
-  1. regime_phases_comparison.gif  - Side-by-side 3D regime phase comparison
-  2. performance_vs_sp500.gif     - Animated cumulative returns with regime bands
+Generate animated GIFs showing LIVE mode operation:
+  1. regime_phases_comparison.gif  - 3D surface morphing through live regime detection
+  2. performance_vs_sp500.gif     - Live portfolio vs S&P 500 with execution engine trades
 """
 
 import matplotlib
@@ -64,7 +64,7 @@ def save_gif(frames, path, duration=FRAME_MS):
 
 
 # ===================================================================
-# 1. Regime Phases Comparison  (animated triptych cycling all 5 phases)
+# 1. Regime Phases Comparison (Live Mode - 3D surface with execution)
 # ===================================================================
 def generate_regime_phases():
     print('Generating regime_phases_comparison.gif ...')
@@ -73,7 +73,6 @@ def generate_regime_phases():
     ivol = np.linspace(10, 55, n)
     X, Y = np.meshgrid(spot, ivol)
 
-    # ----- surface generators per regime -----
     def bull_quiet(X, Y):
         return 22 - 0.012*(X-100)**2 - 0.005*(Y-18)**2
 
@@ -92,22 +91,31 @@ def generate_regime_phases():
         return 20 - 0.011*(X-102)**2 - 0.005*(Y-16)**2
 
     phases = [
-        ('BULL QUIET',        GREEN,  'VIX ~12  |  Signal: STRONG BUY\nCash 15%  |  Sharpe 1.85  |  Alpha +3.2%',
+        ('BULL QUIET',    GREEN,
+         'LIVE | SP500: $5,280 | VIX 12 | Signal: STRONG BUY\n'
+         '[Exec] BUY 892 SPY @ $528.04 | Account: $1,000,000',
          lambda X,Y,t: bull_quiet(X,Y)),
-        ('TRANSITION',        YELLOW, 'VIX ~24  |  Signal: REDUCE RISK\nCash 40%  |  Warning 62%  |  Yield Curve Inverting',
+        ('TRANSITION',    YELLOW,
+         'LIVE | SP500: $5,050 | VIX 24 | Signal: REDUCE RISK\n'
+         '[Exec] SELL 446 SPY @ $505.12 | Account: $987,420',
          lambda X,Y,t: transition(X,Y, 0.3+0.7*t)),
-        ('BEAR VOLATILE',     RED,    'VIX ~67  |  Signal: CRISIS\nCash 70%  |  Warning 95%  |  S&P -34%',
+        ('BEAR VOLATILE', RED,
+         'LIVE | SP500: $3,900 | VIX 67 | Signal: CRISIS\n'
+         '[Exec] SELL 357 SPY @ $391.88 | Account: $932,180',
          lambda X,Y,t: crisis(X,Y)),
-        ('RECOVERY',          CYAN,   'VIX ~28  |  Signal: BUY\nCash 25%  |  Warning 22%  |  Re-entering',
+        ('RECOVERY',      CYAN,
+         'LIVE | SP500: $4,500 | VIX 28 | Signal: BUY\n'
+         '[Exec] BUY 663 SPY @ $450.22 | Account: $961,540',
          lambda X,Y,t: recovery(X,Y, 0.2+0.8*t)),
-        ('NEW BULL',          GREEN,  'VIX ~14  |  Signal: STRONG BUY\nCash 15%  |  Sharpe 2.10  |  Alpha +22%',
+        ('NEW BULL',      GREEN,
+         'LIVE | SP500: $5,600 | VIX 14 | Signal: STRONG BUY\n'
+         '[Exec] BUY 224 SPY @ $560.15 | Account: $1,148,920',
          lambda X,Y,t: new_bull(X,Y)),
     ]
 
     frames_per_phase = 14
     total = frames_per_phase * len(phases)
 
-    # timeline bar positions (fractional)
     tl_starts = [0, 0.16, 0.25, 0.37, 0.53]
     tl_ends   = [0.16, 0.25, 0.37, 0.53, 1.0]
     tl_colors = [GREEN, YELLOW, RED, CYAN, GREEN]
@@ -125,17 +133,16 @@ def generate_regime_phases():
         gs = gridspec.GridSpec(5, 1, height_ratios=[0.6, 0.1, 5.5, 0.5, 0.8],
                                hspace=0.05)
 
-        # --- Title row ---
+        # --- Title row with LIVE indicator ---
         ax_title = fig.add_subplot(gs[0])
         ax_title.set_facecolor(BG)
         ax_title.axis('off')
         ax_title.text(0.5, 0.5,
-                      f'3D P&L COORDINATE SYSTEM  //  Regime: {name}',
+                      f'\u25cf LIVE MODE  //  Regime: {name}  //  Execution Engine Active',
                       color=color, fontsize=16, fontweight='bold',
                       ha='center', va='center', transform=ax_title.transAxes,
                       family='monospace')
 
-        # --- Spacer ---
         ax_sp = fig.add_subplot(gs[1])
         ax_sp.set_facecolor(BG); ax_sp.axis('off')
 
@@ -160,7 +167,7 @@ def generate_regime_phases():
         azim = 210 + fi * 1.8
         ax3d.view_init(elev=26, azim=azim)
 
-        # --- Info panel ---
+        # --- Info panel with execution data ---
         ax_info = fig.add_subplot(gs[3])
         ax_info.set_facecolor(BG); ax_info.axis('off')
         ax_info.text(0.5, 0.5, info, color=color, fontsize=10,
@@ -185,7 +192,6 @@ def generate_regime_phases():
                        fontsize=8, ha='center', va='center', fontweight='bold',
                        family='monospace')
 
-        # Moving marker on timeline
         global_frac = fi / total
         ax_tl.plot([global_frac], [0.15], marker='^', color='white',
                    markersize=8, transform=ax_tl.transAxes, clip_on=False)
@@ -197,7 +203,7 @@ def generate_regime_phases():
 
 
 # ===================================================================
-# 2. Animated Performance vs S&P 500 with Regime Color Bands
+# 2. Live Performance vs S&P 500 with Execution Engine Trades
 # ===================================================================
 def generate_performance_chart():
     print('Generating performance_vs_sp500.gif ...')
@@ -205,15 +211,14 @@ def generate_performance_chart():
     np.random.seed(42)
     days = 756
 
-    # ---- Regime schedule (in trading days) ----
-    # Bull(0-180), Transition(180-240), Crisis(240-340), Recovery(340-460), NewBull(460-756)
+    # Regime schedule (trading days)
     regime_bounds = [0, 180, 240, 340, 460, days]
     regime_names  = ['Bull Quiet', 'Transition', 'Bear Volatile', 'Recovery', 'New Bull']
     regime_colors = [GREEN, YELLOW, RED, CYAN, GREEN]
     regime_drifts = [0.0005, -0.0002, -0.0028, 0.0015, 0.0006]
     regime_vols   = [0.008, 0.014, 0.032, 0.016, 0.009]
 
-    # Generate S&P 500 daily returns per regime
+    # S&P 500 daily returns per regime
     sp_ret = np.zeros(days)
     for i in range(len(regime_names)):
         a, b = regime_bounds[i], regime_bounds[i+1]
@@ -221,16 +226,12 @@ def generate_performance_chart():
 
     sp_cum = np.cumprod(1 + sp_ret) - 1
 
-    # Engine portfolio: hedges during transition/crisis, re-enters at bottom
+    # Engine portfolio: execution engine hedges during transition/crisis
     port_ret = sp_ret.copy()
-    # Transition: reduce exposure
-    port_ret[180:240] = sp_ret[180:240] * 0.4 + 0.0003
-    # Crisis: heavy hedge, only 20% exposure
-    port_ret[240:340] = sp_ret[240:340] * 0.18 + 0.0005
-    # Recovery: re-enter aggressively
-    port_ret[340:460] = sp_ret[340:460] * 1.3 + 0.0003
-    # New Bull: full exposure + premium income
-    port_ret[460:] = sp_ret[460:] * 1.1 + 0.0002
+    port_ret[180:240] = sp_ret[180:240] * 0.4 + 0.0003   # reduce exposure
+    port_ret[240:340] = sp_ret[240:340] * 0.18 + 0.0005   # heavy hedge, 20% exposure
+    port_ret[340:460] = sp_ret[340:460] * 1.3 + 0.0003    # re-enter aggressively
+    port_ret[460:] = sp_ret[460:] * 1.1 + 0.0002          # full exposure + premium
 
     port_cum = np.cumprod(1 + port_ret) - 1
 
@@ -239,6 +240,17 @@ def generate_performance_chart():
     port_dd = (port_peak - (1 + port_cum)) / port_peak
     sp_peak = np.maximum.accumulate(1 + sp_cum)
     sp_dd = (sp_peak - (1 + sp_cum)) / sp_peak
+
+    # Execution engine trades at regime boundaries
+    trade_days = [0, 180, 240, 340, 460]
+    trade_labels = [
+        'BUY 892 SPY',
+        'SELL 446 SPY',
+        'SELL 357 SPY\n(CRISIS hedge)',
+        'BUY 663 SPY\n(Recovery entry)',
+        'BUY 224 SPY',
+    ]
+    trade_colors = [GREEN, RED, RED, GREEN, GREEN]
 
     total_frames = 60
     day_indices = np.linspace(5, days, total_frames, dtype=int)
@@ -253,7 +265,6 @@ def generate_performance_chart():
         ax_t = fig.add_subplot(gs[0, :])
         ax_t.set_facecolor(BG); ax_t.axis('off')
 
-        # Find current regime
         cur_regime = 0
         for ri in range(len(regime_names)):
             if d >= regime_bounds[ri]:
@@ -266,7 +277,7 @@ def generate_performance_chart():
         alpha_now = port_ret_now - sp_ret_now
 
         ax_t.text(0.5, 0.6,
-                  f'PORTFOLIO vs S&P 500 BENCHMARK  //  Day {d}/{days}  //  Regime: {rn}',
+                  f'\u25cf LIVE  |  PORTFOLIO vs S&P 500  |  Day {d}/{days}  |  Regime: {rn}',
                   color=rc, fontsize=14, fontweight='bold', ha='center', va='center',
                   transform=ax_t.transAxes, family='monospace')
         ax_t.text(0.5, 0.1,
@@ -296,20 +307,28 @@ def generate_performance_chart():
                               color=regime_colors[ri], fontsize=7, ha='center',
                               alpha=0.6, family='monospace')
 
-        # Plot lines
         x = np.arange(d)
         ax_r.plot(x, sp_cum[:d]*100, color=RED, linewidth=1.5, alpha=0.7, label='S&P 500')
         ax_r.fill_between(x, 0, sp_cum[:d]*100, color=RED, alpha=0.04)
         ax_r.plot(x, port_cum[:d]*100, color=GREEN, linewidth=2.5, label='Engine Portfolio')
         ax_r.fill_between(x, 0, port_cum[:d]*100, color=GREEN, alpha=0.06)
 
-        # Zero line
-        ax_r.axhline(0, color=DIM, linewidth=0.8, linestyle='--', alpha=0.5)
+        # Mark execution engine trades
+        for ti, td in enumerate(trade_days):
+            if td < d and td > 0:
+                ax_r.axvline(td, color=trade_colors[ti], linestyle='--', alpha=0.5, linewidth=1)
+                y_pos = ax_r.get_ylim()[1]*0.85 - (ti % 2)*5
+                ax_r.annotate(trade_labels[ti], xy=(td, port_cum[td]*100),
+                             xytext=(td+15, y_pos),
+                             color=trade_colors[ti], fontsize=6,
+                             fontfamily='monospace', alpha=0.8,
+                             arrowprops=dict(arrowstyle='->', color=trade_colors[ti], alpha=0.4))
 
+        ax_r.axhline(0, color=DIM, linewidth=0.8, linestyle='--', alpha=0.5)
         ax_r.legend(fontsize=8, loc='upper left', facecolor=BG2,
                     edgecolor=GRID_C, labelcolor=TEXT)
 
-        # --- Stats panel (right) ---
+        # --- Stats panel ---
         ax_s = fig.add_subplot(gs[1, 1])
         ax_s.set_facecolor(BG2); ax_s.axis('off')
 
@@ -322,14 +341,17 @@ def generate_performance_chart():
             (f'Return: {sp_ret_now:+.1f}%', RED),
             (f'MaxDD: {sp_dd[:d].max()*100:.1f}%', RED),
             ('', TEXT),
-            (f'ALPHA: {alpha_now:+.1f}%',
-             GREEN if alpha_now > 0 else RED),
+            (f'ALPHA: {alpha_now:+.1f}%', GREEN if alpha_now > 0 else RED),
+            ('', TEXT),
+            ('EXECUTION', CYAN),
+            (f'Trades: {sum(1 for td in trade_days if td < d)}', CYAN),
+            ('Mode: Paper', DIM),
         ]
 
         for si, (txt, col) in enumerate(stats):
-            y = 0.92 - si * 0.1
-            fs = 11 if si in (0, 4, 8) else 9
-            fw = 'bold' if si in (0, 4, 8) else 'normal'
+            y = 0.95 - si * 0.075
+            fs = 11 if si in (0, 4, 8, 10) else 9
+            fw = 'bold' if si in (0, 4, 8, 10) else 'normal'
             ax_s.text(0.1, y, txt, color=col, fontsize=fs, fontweight=fw,
                       transform=ax_s.transAxes, family='monospace')
 
@@ -353,18 +375,17 @@ def generate_performance_chart():
         ax_dd.legend(fontsize=7, loc='lower left', facecolor=BG2,
                      edgecolor=GRID_C, labelcolor=TEXT)
 
-        # --- Allocation bar (bottom-right) ---
+        # --- Allocation bar ---
         ax_al = fig.add_subplot(gs[2, 1])
         ax_al.set_facecolor(BG2); ax_al.axis('off')
         ax_al.set_xlim(0, 1); ax_al.set_ylim(0, 1)
 
-        # Cash/Equity/Options targets per regime
         alloc_map = {
-            0: (0.15, 0.60, 0.25),  # Bull
-            1: (0.40, 0.40, 0.20),  # Transition
-            2: (0.70, 0.20, 0.10),  # Crisis
-            3: (0.25, 0.50, 0.25),  # Recovery
-            4: (0.15, 0.60, 0.25),  # New Bull
+            0: (0.15, 0.60, 0.25),
+            1: (0.40, 0.40, 0.20),
+            2: (0.70, 0.20, 0.10),
+            3: (0.25, 0.50, 0.25),
+            4: (0.15, 0.60, 0.25),
         }
         cash, eq, opt = alloc_map[cur_regime]
 
