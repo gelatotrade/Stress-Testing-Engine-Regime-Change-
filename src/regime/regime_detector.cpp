@@ -3,8 +3,8 @@
 
 namespace ste {
 
-RegimeDetector::RegimeDetector() {
-    hmm_.initMarketRegimeModel();
+RegimeDetector::RegimeDetector(Timeframe tf) : timeframe_(tf) {
+    hmm_.initMarketRegimeModel(tf);
     current_state_.current_regime = MarketRegime::BullQuiet;
     current_state_.regime_probabilities = {0.4, 0.15, 0.15, 0.05, 0.25};
     current_state_.transition_probability = 0.03;
@@ -54,8 +54,9 @@ RegimeState RegimeDetector::update(const MarketSnapshot& snapshot) {
     volume_history_.push_back(snapshot.volume);
     spread_history_.push_back(snapshot.credit_spread);
 
-    // Keep reasonable buffer size
-    if (price_history_.size() > 500) {
+    // Keep reasonable buffer size (500 trading days equivalent)
+    size_t max_buffer = static_cast<size_t>(daysToPeriodsCount(500, timeframe_));
+    if (price_history_.size() > max_buffer) {
         price_history_.erase(price_history_.begin());
         vol_history_.erase(vol_history_.begin());
         volume_history_.erase(volume_history_.begin());
@@ -151,15 +152,21 @@ TradingSignal RegimeDetector::generateSignal(const RegimeState& regime,
 }
 
 double RegimeDetector::earlyWarningScore() const {
-    if (price_history_.size() < 20) return 0.0;
+    // All lookback windows scaled to timeframe (20 days, 10 days, 5 days, 50 days)
+    int lb20 = daysToPeriodsCount(20, timeframe_);
+    int lb10 = daysToPeriodsCount(10, timeframe_);
+    int lb5  = daysToPeriodsCount(5, timeframe_);
+    int lb50 = daysToPeriodsCount(50, timeframe_);
+
+    if (static_cast<int>(price_history_.size()) < lb20) return 0.0;
 
     double score = 0.0;
     int n = static_cast<int>(price_history_.size());
 
     // Factor 1: Accelerating volatility (vol-of-vol)
-    if (vol_history_.size() >= 20) {
-        auto recent_vol = std::vector<double>(vol_history_.end() - 10, vol_history_.end());
-        auto older_vol = std::vector<double>(vol_history_.end() - 20, vol_history_.end() - 10);
+    if (static_cast<int>(vol_history_.size()) >= lb20) {
+        auto recent_vol = std::vector<double>(vol_history_.end() - lb10, vol_history_.end());
+        auto older_vol = std::vector<double>(vol_history_.end() - lb20, vol_history_.end() - lb10);
         double recent_mean = math::mean(recent_vol);
         double older_mean = math::mean(older_vol);
         if (older_mean > 0) {
@@ -169,18 +176,18 @@ double RegimeDetector::earlyWarningScore() const {
     }
 
     // Factor 2: Price decline momentum
-    if (n >= 20) {
-        double ret_5d = (price_history_[n-1] - price_history_[n-5]) / price_history_[n-5];
-        double ret_20d = (price_history_[n-1] - price_history_[n-20]) / price_history_[n-20];
+    if (n >= lb20) {
+        double ret_5d = (price_history_[n-1] - price_history_[n-lb5]) / price_history_[n-lb5];
+        double ret_20d = (price_history_[n-1] - price_history_[n-lb20]) / price_history_[n-lb20];
         if (ret_5d < -0.03) score += 0.15;
         if (ret_20d < -0.05) score += 0.15;
     }
 
     // Factor 3: Credit spread widening
-    if (spread_history_.size() >= 10) {
+    if (static_cast<int>(spread_history_.size()) >= lb10) {
         double recent_spread = spread_history_.back();
         double avg_spread = math::mean(std::vector<double>(
-            spread_history_.end() - std::min(50, static_cast<int>(spread_history_.size())),
+            spread_history_.end() - std::min(lb50, static_cast<int>(spread_history_.size())),
             spread_history_.end()));
         if (recent_spread > avg_spread * 1.5) score += 0.2;
     }
@@ -195,7 +202,7 @@ double RegimeDetector::computeTransitionUrgency(const RegimeState& state) const 
     // How urgently should we act on regime change
     double urgency = state.transition_probability;
     if (state.crisis_probability > 0.3) urgency *= 2.0;
-    if (state.regime_duration_days < 5) urgency *= 1.5;  // new regime, act fast
+    if (state.regime_duration_days < daysToPeriodsCount(5, timeframe_)) urgency *= 1.5;  // new regime, act fast
     return math::clamp(urgency, 0.0, 1.0);
 }
 

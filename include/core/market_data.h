@@ -9,7 +9,9 @@ public:
     MarketDataGenerator(unsigned seed = 42);
 
     // Generate historical-like data with regime changes
-    std::vector<MarketSnapshot> generateHistory(int num_days, double initial_price = 4500.0);
+    // num_periods: total bars to generate (days, hours, or minutes depending on timeframe)
+    std::vector<MarketSnapshot> generateHistory(int num_periods, double initial_price = 4500.0,
+                                                  Timeframe tf = Timeframe::Daily);
 
     // Generate a single next snapshot given current state
     MarketSnapshot generateNext(const MarketSnapshot& current, MarketRegime regime, double dt = 1.0/252.0);

@@ -17,6 +17,51 @@
 namespace ste {
 
 // ============================================================
+// Timeframe Configuration
+// ============================================================
+
+enum class Timeframe {
+    Daily,      // 1 bar = 1 trading day   (252 bars/year)
+    Hourly,     // 1 bar = 1 hour          (252 * 6.5 = 1638 bars/year)
+    Minute      // 1 bar = 1 minute        (252 * 6.5 * 60 = 98280 bars/year)
+};
+
+// Returns the number of bars in one trading year for a given timeframe
+inline double periodsPerYear(Timeframe tf) {
+    switch (tf) {
+        case Timeframe::Hourly:  return 252.0 * 6.5;          // 1638
+        case Timeframe::Minute:  return 252.0 * 6.5 * 60.0;   // 98280
+        case Timeframe::Daily:
+        default:                 return 252.0;
+    }
+}
+
+// Returns dt as fraction of a year for one bar
+inline double timeframeDt(Timeframe tf) {
+    return 1.0 / periodsPerYear(tf);
+}
+
+// Returns the number of bars equivalent to N trading days
+inline int daysToPeriodsCount(int days, Timeframe tf) {
+    switch (tf) {
+        case Timeframe::Hourly:  return days * static_cast<int>(6.5);
+        case Timeframe::Minute:  return days * static_cast<int>(6.5 * 60);
+        case Timeframe::Daily:
+        default:                 return days;
+    }
+}
+
+// Returns a human-readable label for the timeframe
+inline const char* timeframeName(Timeframe tf) {
+    switch (tf) {
+        case Timeframe::Hourly:  return "Hourly";
+        case Timeframe::Minute:  return "Minute";
+        case Timeframe::Daily:
+        default:                 return "Daily";
+    }
+}
+
+// ============================================================
 // Market & Option Types
 // ============================================================
 

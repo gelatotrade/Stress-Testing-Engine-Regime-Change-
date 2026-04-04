@@ -11,7 +11,7 @@ HiddenMarkovModel::HiddenMarkovModel(int num_states) : num_states_(num_states) {
     state_probs_[0] = 1.0;
 }
 
-void HiddenMarkovModel::initMarketRegimeModel() {
+void HiddenMarkovModel::initMarketRegimeModel(Timeframe tf) {
     // 5 states: BullQuiet, BullVolatile, BearQuiet, BearVolatile, Transition
     num_states_ = 5;
     num_features_ = 4;  // returns, vol, volume_change, spread
@@ -19,8 +19,8 @@ void HiddenMarkovModel::initMarketRegimeModel() {
     // Initial state distribution (start in BullQuiet)
     pi_ = {0.4, 0.15, 0.15, 0.05, 0.25};
 
-    // Transition matrix (daily)
-    A_ = {
+    // Daily transition matrix (base)
+    std::vector<std::vector<double>> daily_A = {
         {0.970, 0.012, 0.005, 0.003, 0.010},  // BullQuiet
         {0.015, 0.950, 0.005, 0.015, 0.015},  // BullVolatile
         {0.008, 0.005, 0.960, 0.012, 0.015},  // BearQuiet
@@ -28,22 +28,46 @@ void HiddenMarkovModel::initMarketRegimeModel() {
         {0.020, 0.020, 0.020, 0.020, 0.920},  // Transition
     };
 
+    // Scale transition matrix for sub-daily timeframes
+    // For sub-daily bars, regimes persist longer per-bar
+    A_ = daily_A;
+    if (tf != Timeframe::Daily) {
+        double bars_per_day = periodsPerYear(tf) / 252.0;
+        for (int i = 0; i < 5; ++i) {
+            double daily_stay = daily_A[i][i];
+            double bar_stay = std::pow(daily_stay, 1.0 / bars_per_day);
+            double daily_leave = 1.0 - daily_stay;
+            double bar_leave = 1.0 - bar_stay;
+            for (int j = 0; j < 5; ++j) {
+                if (i == j) {
+                    A_[i][j] = bar_stay;
+                } else {
+                    A_[i][j] = (daily_leave > 1e-15) ?
+                        daily_A[i][j] / daily_leave * bar_leave : bar_leave / 4.0;
+                }
+            }
+        }
+    }
+
     // Emission means [state][feature]: returns, vol, vol_of_vol, spread
+    // Returns (feature 0) are per-bar, so scale by sqrt(dt/daily_dt)
+    // Other features (vol level, vol-of-vol, spread) don't change with timeframe
+    double return_scale = std::sqrt(timeframeDt(tf) / timeframeDt(Timeframe::Daily));
     mu_ = {
-        { 0.0005,  0.12,  0.0,   1.0},   // BullQuiet: positive return, low vol
-        { 0.0008,  0.25,  0.5,   1.5},   // BullVolatile: positive return, high vol
-        {-0.0003,  0.15, -0.1,   1.8},   // BearQuiet: negative return, moderate vol
-        {-0.0015,  0.40,  1.0,   3.5},   // BearVolatile: negative return, very high vol
-        { 0.0000,  0.20,  0.3,   2.0},   // Transition: flat, medium vol
+        { 0.0005 * return_scale,  0.12,  0.0,   1.0},   // BullQuiet
+        { 0.0008 * return_scale,  0.25,  0.5,   1.5},   // BullVolatile
+        {-0.0003 * return_scale,  0.15, -0.1,   1.8},   // BearQuiet
+        {-0.0015 * return_scale,  0.40,  1.0,   3.5},   // BearVolatile
+        { 0.0000,                 0.20,  0.3,   2.0},   // Transition
     };
 
-    // Emission standard deviations
+    // Emission standard deviations — returns scale with sqrt(dt)
     sigma_ = {
-        {0.008, 0.03, 0.5, 0.3},   // BullQuiet: tight
-        {0.015, 0.08, 0.8, 0.5},   // BullVolatile: wide
-        {0.010, 0.04, 0.6, 0.5},   // BearQuiet
-        {0.025, 0.12, 1.0, 1.0},   // BearVolatile: very wide
-        {0.012, 0.06, 0.7, 0.6},   // Transition
+        {0.008 * return_scale, 0.03, 0.5, 0.3},   // BullQuiet: tight
+        {0.015 * return_scale, 0.08, 0.8, 0.5},   // BullVolatile: wide
+        {0.010 * return_scale, 0.04, 0.6, 0.5},   // BearQuiet
+        {0.025 * return_scale, 0.12, 1.0, 1.0},   // BearVolatile: very wide
+        {0.012 * return_scale, 0.06, 0.7, 0.6},   // Transition
     };
 
     state_probs_ = {0.4, 0.15, 0.15, 0.05, 0.25};
