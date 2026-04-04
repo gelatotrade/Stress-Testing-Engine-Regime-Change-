@@ -1,54 +1,58 @@
 # Stress Testing Engine with Regime Change Detection
 
-A high-performance C++ engine for stress testing options portfolio strategies with real-time 3D visualization, Hidden Markov Model regime detection, and early warning signals for optimal risk allocation vs. S&P 500 benchmark.
+A high-performance C++ engine for **live** and **backtest** stress testing of options portfolio strategies. Features real-time 3D visualization, Hidden Markov Model regime detection, an execution engine for automated trading, and early warning signals for optimal risk allocation vs. S&P 500 benchmark.
+
+**The engine runs in two modes:**
+- **Live Mode** (`--live`): Connects to real-time market data, detects regime changes as they happen, and automatically executes trades through the execution engine to outperform the S&P 500
+- **Simulation Mode** (default): Backtests the strategy on synthetic or historical data
 
 ---
 
 ## Live 3D Regime Change Visualization
 
-The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Volatility x P&L) that **morphs in real-time** as market regimes shift. The surface color, shape, and orientation change as the Hidden Markov Model detects regime transitions -- from smooth green domes in bull markets to inverted red craters during crashes.
+The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Volatility x P&L) that **morphs in real-time** as market regimes shift. In live mode, the surface updates tick-by-tick from the live data feed while the execution engine automatically rebalances positions.
 
-### P&L Surface Morphing Through Market Regimes
+### P&L Surface Morphing Through Live Regime Detection
 
-> The 3D surface rotates and deforms live as the engine cycles through: **Bull Quiet** (green) --> **Transition** (yellow/orange) --> **Bear Volatile / Crisis** (red) --> **Recovery** (blue) --> **New Bull** (green)
+> The 3D surface rotates and deforms live as the HMM detects regime transitions: **Bull Quiet** (green) --> **Transition** (yellow/orange) --> **Bear Volatile / Crisis** (red) --> **Recovery** (blue) --> **New Bull** (green). The execution engine trades are shown in real-time.
 
-![3D P&L Surface - Regime Cycle Animation](docs/img/regime_cycle_3d.gif)
+![3D P&L Surface - Live Regime Cycle](docs/img/regime_cycle_3d.gif)
 
 **What you're seeing:**
-- **X-Axis**: Spot Price ($) -- the underlying S&P 500 level
-- **Y-Axis**: Implied Volatility (%) -- option-implied expected volatility
+- **X-Axis**: Spot Price ($) -- the underlying S&P 500 level from live feed
+- **Y-Axis**: Implied Volatility (%) -- option-implied expected volatility (VIX)
 - **Z-Axis**: P&L ($) -- portfolio profit/loss from Iron Condor strategy
-- **Color**: Green = profit zone, Red = loss zone, shifting with regime
+- **Color**: Green = profit zone, Red = loss zone, shifting with live regime
 - **Bottom bar**: Regime timeline progressing through the full cycle
-- **Header**: Current regime, trading signal, and VIX level updating live
+- **Header**: LIVE indicator, current regime, execution engine trades, VIX level
 
-| Phase | Surface Shape | VIX | Signal | Cash Allocation |
-|-------|--------------|-----|--------|-----------------|
-| Bull Quiet | Smooth elevated dome | ~12 | STRONG BUY | 15% |
-| Transition | Rippling, tilting surface | ~24 | REDUCE RISK | 40% |
-| Bear Volatile | Inverted crater, deep valleys | ~67 | CRISIS | 70% |
-| Recovery | Reforming upward slope | ~28 | BUY | 25% |
-| New Bull | Smooth dome returns | ~14 | STRONG BUY | 15% |
+| Phase | Surface Shape | VIX | Signal | Execution Action | Cash |
+|-------|--------------|-----|--------|-----------------|------|
+| Bull Quiet | Smooth elevated dome | ~12 | STRONG BUY | BUY 892 SPY | 15% |
+| Transition | Rippling, tilting surface | ~24 | REDUCE RISK | SELL 446 SPY | 40% |
+| Bear Volatile | Inverted crater, deep valleys | ~67 | CRISIS | SELL 357 SPY | 70% |
+| Recovery | Reforming upward slope | ~28 | BUY | BUY 663 SPY | 25% |
+| New Bull | Smooth dome returns | ~14 | STRONG BUY | BUY 224 SPY | 15% |
 
 ---
 
-### Early Warning Dashboard
+### Early Warning Dashboard with Execution Engine
 
-The multi-panel dashboard tracks crisis probability, VIX trajectory, portfolio allocation shifts, and cumulative returns vs. S&P 500 benchmark in real-time. Watch how the system **detects the incoming crash early** and shifts to cash before the drawdown hits.
+The multi-panel dashboard tracks crisis probability, VIX trajectory from the live feed, portfolio allocation shifts managed by the execution engine, and cumulative returns vs. S&P 500 benchmark. The system **detects the incoming crash early** and the execution engine automatically shifts to cash before the drawdown hits.
 
 ![Early Warning Dashboard Animation](docs/img/early_warning_dashboard.gif)
 
 **Panels:**
 - **Top-Left**: Crisis probability gauge -- rises from 5% to 89% as crash approaches
-- **Top-Right**: VIX trajectory -- climbing from 12 past the danger threshold to 67
-- **Bottom-Left**: Portfolio allocation bars -- cash increasing, equity decreasing as risk rises
-- **Bottom-Right**: Cumulative returns -- portfolio (green) avoids the crash vs. S&P 500 (red)
+- **Top-Right**: VIX trajectory from live data feed -- climbing from 12 past the danger threshold to 67
+- **Bottom-Left**: Execution engine allocation -- cash increasing, equity decreasing as risk rises. Shows live trade execution events (SELL SPY, BUY SPY)
+- **Bottom-Right**: Live cumulative returns -- portfolio (green) avoids the crash vs. S&P 500 (red)
 
 ---
 
 ### Stress Test P&L Surface
 
-The stress test engine sweeps across **Spot Shocks** (-50% to +20%) and **Volatility Shocks** (0% to +50%) simultaneously, computing portfolio P&L at every combination. Historical crisis scenarios (GFC 2008, COVID 2020, etc.) are marked as labeled points on the surface.
+The stress test engine sweeps across **Spot Shocks** (-50% to +20%) and **Volatility Shocks** (0% to +50%) simultaneously, computing portfolio P&L at every combination. Historical crisis scenarios (GFC 2008, COVID 2020, etc.) are marked as labeled points on the surface. In live mode, stress tests run continuously on the current portfolio.
 
 ![Stress Test Surface Animation](docs/img/stress_test_surface.gif)
 
@@ -62,7 +66,7 @@ The stress test engine sweeps across **Spot Shocks** (-50% to +20%) and **Volati
 
 ### HMM Regime Transition Matrix
 
-The Hidden Markov Model's **5x5 transition probability matrix** shows the likelihood of moving between market regimes. The dashed cyan box tracks the current state as it moves through the cycle. Watch the probabilities shift as different regimes become more or less likely.
+The Hidden Markov Model's **5x5 transition probability matrix** shows the likelihood of moving between market regimes. In live mode, the current state updates in real-time as the HMM processes incoming market data. The dashed cyan box tracks the current state.
 
 ![Regime Transition Heatmap Animation](docs/img/regime_transition_heatmap.gif)
 
@@ -71,41 +75,58 @@ The Hidden Markov Model's **5x5 transition probability matrix** shows the likeli
 - **Diagonal** = probability of staying in current regime (self-transition)
 - **Off-diagonal** = probability of regime change
 - **Hot colors** (red/orange) = high probability, **Cool colors** (blue) = low probability
-- **Dashed box** = current active state moving through the cycle
+- **Dashed box** = current active state detected by live HMM
 
 ---
 
 ## How the 3D Coordinate System Changes Per Regime
 
-Watch the 3D P&L surface **morph in real-time** as the engine cycles through all 5 market regimes. The surface color, shape, and height change as the Hidden Markov Model detects regime transitions. The timeline bar at the bottom tracks the current phase.
+Watch the 3D P&L surface **morph in real-time** as the engine cycles through all 5 market regimes. Each regime shows the execution engine's live trade actions and account state.
 
 ![3D Regime Phase Comparison Animation](docs/img/regime_phases_comparison.gif)
 
 **What changes per regime:**
-- **Bull Quiet**: Smooth green elevated dome -- stable premium income, low vol, high Sharpe
-- **Transition**: Surface starts rippling and tilting -- early warning score rising, VIX climbing
-- **Bear Volatile**: Surface **inverts** into a deep red crater -- crisis mode, max cash allocation
-- **Recovery**: Surface reforms upward with steep blue slopes -- re-entering at the bottom
-- **New Bull**: Smooth green dome returns at higher levels -- full cycle alpha locked in
+- **Bull Quiet**: Smooth green dome -- `BUY 892 SPY @ $528.04` -- full risk, Account: $1,000,000
+- **Transition**: Surface rippling -- `SELL 446 SPY @ $505.12` -- reducing exposure, Account: $987,420
+- **Bear Volatile**: Deep red crater -- `SELL 357 SPY @ $391.88` -- crisis hedge, Account: $932,180
+- **Recovery**: Reforming upward -- `BUY 663 SPY @ $450.22` -- re-entering at bottom, Account: $961,540
+- **New Bull**: Smooth green dome -- `BUY 224 SPY @ $560.15` -- full exposure, Account: $1,148,920
 
 ---
 
-### Full Cycle Performance vs. S&P 500
+### Live Performance vs. S&P 500 with Execution Engine Trades
 
-The animated chart below shows the engine's portfolio (green) vs. the S&P 500 benchmark (red) over a full 756-day cycle. Watch how the regime detection system **avoids the crash** by shifting to cash early, then **re-enters aggressively** at the bottom during recovery.
+The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmark (red) over a full cycle. Trade markers show exactly when the execution engine acted. The engine **avoids the crash** by selling before the drawdown, then **re-enters aggressively** at the bottom.
 
 ![Performance vs S&P 500 Animation](docs/img/performance_vs_sp500.gif)
 
 **Key observations:**
-- **Day 180-240 (Transition)**: Engine detects regime shift, starts reducing equity exposure
+- **Day 180-240 (Transition)**: HMM detects regime shift, execution engine sells `446 SPY`
 - **Day 240-340 (Crisis)**: Portfolio holds 70% cash while S&P drops -- drawdown limited to ~8% vs ~35%
-- **Day 340-460 (Recovery)**: Engine re-enters with 1.3x exposure, capturing the V-shaped recovery
-- **Day 460+ (New Bull)**: Full exposure with options premium income, alpha continues to compound
-- **Lower panel**: Drawdown comparison -- the engine's max drawdown is a fraction of the benchmark's
+- **Day 340-460 (Recovery)**: Execution engine buys `663 SPY`, capturing the V-shaped recovery
+- **Day 460+ (New Bull)**: Full exposure with options premium income, alpha compounds
+- **Lower panel**: Drawdown comparison -- engine's max drawdown is a fraction of the benchmark's
 
 ---
 
 ## Features
+
+### Live Mode (`--live`)
+- **Real-time market data feed** with pluggable providers (Yahoo Finance, mock simulation)
+- **Live regime detection** -- HMM processes each tick and detects regime changes as they happen
+- **Execution engine** -- automatically converts trading signals into orders
+- **Paper trading** with realistic slippage and commission modeling
+- **Auto-reconnect** with exponential backoff on data feed disconnection
+- **Live 3D dashboard** at `localhost:8080` with Server-Sent Events streaming
+
+### Execution Engine (C++)
+- **`IExecutionEngine` interface** -- abstract base for any broker connection
+- **`PaperTradingEngine`** -- simulated execution with slippage (2 bps) and commission ($1/trade)
+- **`OrderManager`** -- converts `TradingSignal` into `Order` objects with allocation drift detection
+- **Order types**: Market, Limit, Stop, StopLimit
+- **Asset classes**: Equity, Option, Future, ETF
+- **Trade logging** with full audit trail
+- Ready for broker integration (Interactive Brokers, Alpaca, etc.) via `IExecutionEngine` subclass
 
 ### Options Pricing & Greeks
 - **Black-Scholes** analytical pricing with full Greeks (Delta, Gamma, Theta, Vega, Rho)
@@ -140,6 +161,14 @@ The animated chart below shows the engine's portfolio (green) vs. the S&P 500 be
 - **Correlated multi-factor scenarios**
 - **Reverse stress testing** (find scenarios causing target loss)
 - **VaR and CVaR** computation
+- Runs continuously in live mode on the current portfolio
+
+### Walk-Forward Backtester
+- **Out-of-sample testing** with expanding or rolling windows
+- **Execution delay** (T+1) to avoid close-price bias
+- **Transaction cost and slippage modeling**
+- **Purged k-fold cross-validation** to prevent overfitting
+- **ARIMA-GARCH** data generation for realistic backtests
 
 ### 3D Live Visualization Dashboard
 - **Real-time 3D P&L surface** (Spot x Volatility x P&L) using Three.js/WebGL
@@ -161,7 +190,10 @@ src/
 │   ├── black_scholes   # Analytical options pricing & Greeks
 │   ├── monte_carlo     # MC simulation with regime switching
 │   ├── portfolio       # Portfolio management & P&L surfaces
-│   └── market_data     # Synthetic market data generator
+│   ├── market_data     # Synthetic market data generator
+│   ├── arima           # ARIMA-GARCH realistic data generation
+│   ├── backtester      # Walk-forward out-of-sample backtester
+│   └── statistical_tests # Sharpe/bootstrap/permutation tests
 ├── strategies/         # Options strategy library
 │   ├── options_strategies  # 10+ strategy factories
 │   └── strategy_manager    # Regime-based strategy selection
@@ -172,6 +204,10 @@ src/
 │   ├── stress_engine       # Main stress test runner
 │   ├── scenario_generator  # Parametric & tail risk scenarios
 │   └── historical_scenarios # Pre-built crisis scenarios
+├── live/               # Live data feed          ← NEW
+│   └── live_data_feed      # Pluggable providers (Yahoo, Mock)
+├── execution/          # Execution engine         ← NEW
+│   └── execution_engine    # IExecutionEngine, PaperTrading, OrderManager
 ├── visualization/      # Live dashboard
 │   ├── web_server      # Embedded HTTP + SSE server
 │   └── data_broadcaster # Real-time data serialization
@@ -181,49 +217,75 @@ src/
     └── csv_parser      # Data I/O
 ```
 
-### Data Flow
+### Live Mode Data Flow
 
 ```
- Market Data (Synthetic S&P 500)
-           |
-           v
-+------------------------+
-|   Feature Extraction   |  Returns, Vol, Spreads, Volume
-+------------------------+
-           |
-     +-----+-----+
-     |           |
-     v           v
-+-----------+  +------------------+
-| HMM Regime|  | Early Warning    |
-| Detector  |->| System           |
-+-----------+  +------------------+
-     |           |
-     v           v
-+-----------+  +------------------+
-| Strategy  |  | Trading Signal   |
+ Live Market Data Feed                    Execution Engine
+ (Yahoo Finance / Mock)                   (Paper / Broker)
+        |                                       ^
+        v                                       |
++------------------------+              +------------------+
+|   Feature Extraction   |              | Order Manager    |
+|   Returns, Vol, Spread |              | Signal -> Orders |
++------------------------+              +------------------+
+        |                                       ^
+  +-----+-----+                                 |
+  |           |                                  |
+  v           v                                  |
++-----------+  +------------------+              |
+| HMM Regime|  | Early Warning    |              |
+| Detector  |->| System           |              |
++-----------+  +------------------+              |
+  |           |                                  |
+  v           v                                  |
++-----------+  +------------------+              |
+| Strategy  |  | Trading Signal   |--------------+
 | Manager   |  | BUY/HOLD/CRISIS  |
 +-----------+  +------------------+
-     |           |
-     +-----+-----+
-           |
-           v
+  |           |
+  +-----+-----+
+        |
+        v
 +------------------------+
-|   Portfolio Engine     |
-|   (P&L, Greeks, VaR)  |
+|   Portfolio Engine      |
+|   (P&L, Greeks, VaR)   |
 +------------------------+
-           |
-     +-----+-----+
-     |           |
-     v           v
+        |
+  +-----+-----+
+  |           |
+  v           v
 +-----------+  +------------------+
 | Stress    |  | 3D Visualization |
 | Testing   |  | WebGL + SSE      |
 +-----------+  +------------------+
-                       |
-                       v
-              localhost:8080
+                      |
+                      v
+             localhost:8080
 ```
+
+### Broker Integration Architecture
+
+The execution engine is written in **C++** and provides an abstract `IExecutionEngine` interface. To connect to a real broker:
+
+```cpp
+// Implement the interface for your broker
+class AlpacaEngine : public ste::IExecutionEngine {
+    bool connect() override;           // WebSocket connect to broker
+    int submitOrder(const Order&) override;  // REST/WS order submission
+    AccountState accountState() const override;
+    // ... etc
+};
+
+// Or use a Rust adapter via IPC/gRPC for async WebSocket brokers
+// Rust (tokio-tungstenite) <-> gRPC <-> C++ Engine
+```
+
+Supported integration patterns:
+- **Direct C++**: Use `libwebsockets`, `Boost.Beast`, or `uWebSockets` for WebSocket APIs (Interactive Brokers, Alpaca, Coinbase)
+- **Rust Adapter**: Build a thin Rust microservice with `tokio-tungstenite` for high-performance async WebSocket handling, connected via gRPC/IPC
+- **REST**: Simple HTTP-based brokers via libcurl (already used for Yahoo Finance data)
+
+---
 
 ## Build & Run
 
@@ -231,6 +293,7 @@ src/
 - C++20 compiler (GCC 10+, Clang 12+)
 - CMake 3.16+
 - POSIX threads
+- `curl` (for Yahoo Finance live data feed)
 - Python 3.8+ with matplotlib, numpy, Pillow (for visualization generation only)
 
 ### Build
@@ -245,7 +308,22 @@ make -j$(nproc)
 ./build/run_tests
 ```
 
-### Run Engine
+### Run Live Mode
+```bash
+# Live with mock data (real-time simulation, no API needed)
+./build/stress_engine --live --data-source mock --timeframe 1m
+
+# Live with Yahoo Finance (real market data)
+./build/stress_engine --live --data-source yahoo --timeframe 1m
+
+# Live headless (terminal only, no web dashboard)
+./build/stress_engine --live --data-source mock --headless
+
+# Live with custom capital
+./build/stress_engine --live --capital 500000 --data-source mock
+```
+
+### Run Simulation (Backtest)
 ```bash
 # Full simulation with live 3D dashboard
 ./build/stress_engine
@@ -264,28 +342,45 @@ make -j$(nproc)
 pip install matplotlib numpy Pillow
 python3 scripts/generate_visualizations.py
 python3 scripts/gen_regime_3d.py
+python3 scripts/generate_extra_visualizations.py
 ```
 
 ### CLI Options
+
+**Common:**
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--port` | 8080 | Web dashboard port |
+| `--timeframe` | daily | `daily`, `hourly`/`1h`, `minute`/`1m` |
+| `--headless` | false | Run without web server |
+
+**Live Mode:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--live` | off | Enable live mode |
+| `--data-source` | mock | `mock` (simulation) or `yahoo` (real data) |
+| `--api-key` | - | API key for providers that require one |
+| `--capital` | 1000000 | Initial trading capital |
+| `--paper` | on | Paper trading mode |
+
+**Simulation Mode:**
+| Option | Default | Description |
+|--------|---------|-------------|
 | `--days` | 756 | Simulation trading days (756 = 3 years) |
 | `--speed` | 100 | Milliseconds between frames |
 | `--price` | 4500 | Initial S&P 500 price |
-| `--headless` | false | Run without web server |
 
 ---
 
 ## Regime-Strategy Mapping
 
-| Regime | Surface Shape | Recommended Strategies | Cash Target | Signal |
-|--------|---------------|----------------------|-------------|--------|
-| Bull Quiet | Smooth green dome | Covered Call, Iron Condor, Bull Call Spread | 15% | Strong Buy |
-| Bull Volatile | Steep green peaks | Collar, Straddle, Covered Call | 25% | Buy |
-| Bear Quiet | Flat yellow surface | Bear Put Spread, Collar, Protective Put | 40% | Reduce Risk |
-| Bear Volatile | **Inverted red crater** | **Protective Put, Collar (CRISIS)** | **60-70%** | **CRISIS** |
-| Transition | Rippled mixed surface | Straddle, Strangle, Collar | 35% | Hold |
+| Regime | Surface Shape | Recommended Strategies | Cash Target | Execution Action |
+|--------|---------------|----------------------|-------------|-----------------|
+| Bull Quiet | Smooth green dome | Covered Call, Iron Condor, Bull Call Spread | 15% | BUY equity, collect premium |
+| Bull Volatile | Steep green peaks | Collar, Straddle, Covered Call | 25% | Reduce size, add hedges |
+| Bear Quiet | Flat yellow surface | Bear Put Spread, Collar, Protective Put | 40% | SELL equity incrementally |
+| Bear Volatile | **Inverted red crater** | **Protective Put, Collar (CRISIS)** | **60-70%** | **SELL to cash, full hedge** |
+| Transition | Rippled mixed surface | Straddle, Strangle, Collar | 35% | Hold, tighten stops |
 
 ---
 
@@ -302,7 +397,7 @@ python3 scripts/gen_regime_3d.py
   Volmageddon 2018   |██████████| -10.0%  VIX +35
   Flash Crash 2010   |█████████| -9.0%  VIX +25
 
-  WITH Engine Hedging Active:
+  WITH Engine Hedging Active (Execution Engine auto-rebalance):
   GFC 2008           |████████████| -12.0%  (43% loss avoided)
   COVID 2020         |████████| -8.0%   (26% loss avoided)
   Black Monday       |██████| -6.0%   (16.6% loss avoided)

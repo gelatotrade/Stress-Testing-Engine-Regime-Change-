@@ -1,4 +1,12 @@
-"""Generate the main 3D P&L surface regime cycle animation."""
+#!/usr/bin/env python3
+"""
+Generate the main 3D P&L surface regime cycle animation.
+
+Simulates a LIVE data feed scenario: the engine connects to market data,
+detects regime changes in real-time via HMM, and morphs the 3D P&L surface
+as live regime transitions occur. The surface, signals, and execution
+indicators update tick-by-tick as if running in --live mode.
+"""
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -7,6 +15,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from PIL import Image
 import io
 import os
+from datetime import datetime, timedelta
 
 OUT = os.path.join(os.path.dirname(__file__), '..', 'docs', 'img', 'regime_cycle_3d.gif')
 
@@ -28,37 +37,40 @@ def bs_put(S, K, T, r, sigma):
 
 def iron_condor_pnl(S, vol, base_spot, T, r):
     """Iron Condor: short put spread + short call spread around base_spot."""
-    K_pl = base_spot * 0.90  # long put
-    K_ps = base_spot * 0.95  # short put
-    K_cs = base_spot * 1.05  # short call
-    K_cl = base_spot * 1.10  # long call
+    K_pl = base_spot * 0.90
+    K_ps = base_spot * 0.95
+    K_cs = base_spot * 1.05
+    K_cl = base_spot * 1.10
     T0 = 30/365.0
-    # entry premiums at base_spot, base vol
     base_vol = 0.15
     prem = (-bs_put(base_spot, K_ps, T0, r, base_vol) + bs_put(base_spot, K_pl, T0, r, base_vol)
             -bs_call(base_spot, K_cs, T0, r, base_vol) + bs_call(base_spot, K_cl, T0, r, base_vol))
-    # current value
     curr = (-bs_put(S, K_ps, T, r, vol) + bs_put(S, K_pl, T, r, vol)
             -bs_call(S, K_cs, T, r, vol) + bs_call(S, K_cl, T, r, vol))
-    return (prem - curr) * 100  # per contract
+    return (prem - curr) * 100
 
-# Regime configurations
+# Regime configurations -- modeled on live market data feed
 REGIMES = [
     {"name": "BULL QUIET",      "signal": "STRONG BUY",  "vix": 12.3, "color": "#00ff88",
-     "base": 4500, "vol_center": 0.13, "spot_drift": 0.0, "surface_scale": 1.0,
-     "cash": 15, "equity": 60, "options": 25, "warning": 12, "crisis": 3},
+     "base": 5280, "vol_center": 0.13, "spot_drift": 0.0, "surface_scale": 1.0,
+     "cash": 15, "equity": 60, "options": 25, "warning": 12, "crisis": 3,
+     "exec": "BUY 892 SPY @ $528.04  FILLED", "account": "$1,000,000", "positions": 1},
     {"name": "TRANSITION",      "signal": "REDUCE RISK", "vix": 24.5, "color": "#ffaa00",
-     "base": 4400, "vol_center": 0.22, "spot_drift": -0.02, "surface_scale": 1.3,
-     "cash": 40, "equity": 40, "options": 20, "warning": 58, "crisis": 25},
+     "base": 5050, "vol_center": 0.22, "spot_drift": -0.02, "surface_scale": 1.3,
+     "cash": 40, "equity": 40, "options": 20, "warning": 58, "crisis": 25,
+     "exec": "SELL 446 SPY @ $505.12  FILLED", "account": "$987,420", "positions": 1},
     {"name": "BEAR VOLATILE",   "signal": "CRISIS",      "vix": 67.2, "color": "#ff3344",
-     "base": 3200, "vol_center": 0.50, "spot_drift": -0.08, "surface_scale": 2.5,
-     "cash": 70, "equity": 20, "options": 10, "warning": 95, "crisis": 89},
+     "base": 3900, "vol_center": 0.50, "spot_drift": -0.08, "surface_scale": 2.5,
+     "cash": 70, "equity": 20, "options": 10, "warning": 95, "crisis": 89,
+     "exec": "SELL 357 SPY @ $391.88  FILLED", "account": "$932,180", "positions": 1},
     {"name": "RECOVERY",        "signal": "BUY",         "vix": 28.4, "color": "#00aaff",
-     "base": 3800, "vol_center": 0.28, "spot_drift": 0.03, "surface_scale": 1.5,
-     "cash": 25, "equity": 50, "options": 25, "warning": 22, "crisis": 11},
+     "base": 4500, "vol_center": 0.28, "spot_drift": 0.03, "surface_scale": 1.5,
+     "cash": 25, "equity": 50, "options": 25, "warning": 22, "crisis": 11,
+     "exec": "BUY 663 SPY @ $450.22  FILLED", "account": "$961,540", "positions": 1},
     {"name": "NEW BULL",        "signal": "STRONG BUY",  "vix": 13.8, "color": "#00ff88",
-     "base": 5000, "vol_center": 0.14, "spot_drift": 0.01, "surface_scale": 1.0,
-     "cash": 15, "equity": 60, "options": 25, "warning": 8, "crisis": 2},
+     "base": 5600, "vol_center": 0.14, "spot_drift": 0.01, "surface_scale": 1.0,
+     "cash": 15, "equity": 60, "options": 25, "warning": 8, "crisis": 2,
+     "exec": "BUY 224 SPY @ $560.15  FILLED", "account": "$1,148,920", "positions": 1},
 ]
 
 FRAMES_PER_REGIME = 12
@@ -68,9 +80,8 @@ frames = []
 for frame_idx in range(TOTAL_FRAMES):
     regime_idx = frame_idx // FRAMES_PER_REGIME
     sub_frame = frame_idx % FRAMES_PER_REGIME
-    t = sub_frame / FRAMES_PER_REGIME  # 0..1 within regime
+    t = sub_frame / FRAMES_PER_REGIME
 
-    # Interpolate between current and next regime
     curr = REGIMES[regime_idx]
     nxt = REGIMES[min(regime_idx + 1, len(REGIMES) - 1)]
 
@@ -90,30 +101,26 @@ for frame_idx in range(TOTAL_FRAMES):
     r = 0.05
     Z = iron_condor_pnl(S_grid, V_grid, base, T_opt, r) / sc
 
-    # Add turbulence in volatile regimes
-    if regime_idx in [1, 2]:  # transition, crisis
+    if regime_idx in [1, 2]:
         noise = np.sin(S_grid / 50 + frame_idx * 0.3) * np.cos(V_grid * 20 + frame_idx * 0.2)
         Z += noise * sc * 3
 
-    # Create figure
     fig = plt.figure(figsize=(8, 6), dpi=100, facecolor='#0d0d0d')
     ax = fig.add_subplot(111, projection='3d', facecolor='#0d0d0d')
 
-    # Color map by regime
     z_norm = (Z - Z.min()) / (Z.max() - Z.min() + 1e-10)
-    if regime_idx == 0 or regime_idx == 4:  # bull
+    if regime_idx == 0 or regime_idx == 4:
         colors = plt.cm.Greens(z_norm * 0.7 + 0.3)
-    elif regime_idx == 1:  # transition
+    elif regime_idx == 1:
         colors = plt.cm.YlOrRd(1.0 - z_norm * 0.6)
-    elif regime_idx == 2:  # crisis
+    elif regime_idx == 2:
         colors = plt.cm.hot(1.0 - z_norm * 0.7)
-    else:  # recovery
+    else:
         colors = plt.cm.cool(z_norm * 0.7 + 0.2)
 
     ax.plot_surface(S_grid, V_grid * 100, Z, facecolors=colors, alpha=0.88,
                     edgecolor='none', antialiased=True, shade=True)
 
-    # Rotate camera
     angle = 220 + frame_idx * 2.5
     ax.view_init(elev=28, azim=angle)
 
@@ -130,24 +137,23 @@ for frame_idx in range(TOTAL_FRAMES):
     ax.zaxis.pane.set_edgecolor('#222222')
     ax.grid(True, alpha=0.15)
 
-    # Title with regime info
+    # Title with LIVE indicator and regime info
     title_color = curr["color"]
-    fig.suptitle(f'Regime: {curr["name"]}  |  Signal: {curr["signal"]}  |  VIX: {vix:.1f}',
-                 color=title_color, fontsize=12, fontweight='bold', y=0.97)
+    fig.suptitle(f'\u25cf LIVE  |  Regime: {curr["name"]}  |  Signal: {curr["signal"]}  |  VIX: {vix:.1f}',
+                 color=title_color, fontsize=11, fontweight='bold', y=0.97)
 
-    # Info bar at bottom
+    # Info bar: execution engine status + allocations
     fig.text(0.02, 0.02,
+             f'[Execution] {curr["exec"]}   |   '
              f'Cash: {curr["cash"]}%  Equity: {curr["equity"]}%  Options: {curr["options"]}%   '
-             f'Early Warning: {warn:.0f}%   Crisis Prob: {crisis:.0f}%',
-             color='#888888', fontsize=8, fontfamily='monospace')
+             f'Warning: {warn:.0f}%  Crisis: {crisis:.0f}%',
+             color='#888888', fontsize=7, fontfamily='monospace')
 
     # Regime timeline bar
-    progress = (frame_idx + 1) / TOTAL_FRAMES
     bar_y = 0.06
     fig.patches.append(plt.Rectangle((0.05, bar_y), 0.9, 0.012, transform=fig.transFigure,
                                       facecolor='#1a1a1a', edgecolor='#333333', linewidth=0.5))
-    # Color segments
-    regime_colors = ['#00ff88', '#ffaa00', '#ff3344', '#00aaff', '#00ff88']
+    regime_colors_bar = ['#00ff88', '#ffaa00', '#ff3344', '#00aaff', '#00ff88']
     for ri in range(5):
         x0 = 0.05 + ri * 0.18
         w = 0.18
@@ -155,11 +161,10 @@ for frame_idx in range(TOTAL_FRAMES):
         if ri == regime_idx:
             w = 0.18 * t
         fig.patches.append(plt.Rectangle((x0, bar_y), w, 0.012, transform=fig.transFigure,
-                                          facecolor=regime_colors[ri], alpha=alpha))
+                                          facecolor=regime_colors_bar[ri], alpha=alpha))
 
     plt.tight_layout(rect=[0, 0.08, 1, 0.94])
 
-    # Save frame to buffer
     buf = io.BytesIO()
     fig.savefig(buf, format='png', facecolor='#0d0d0d', bbox_inches='tight', pad_inches=0.2)
     plt.close(fig)

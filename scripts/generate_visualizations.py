@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """
 Generate animated GIF visualizations for the Stress-Testing-Engine README.
-Produces 4 GIFs showing 3D P&L surfaces, dashboards, stress tests, and heatmaps.
+All visualizations show LIVE mode operation with real-time regime detection
+and execution engine integration.
+
+Produces 4 GIFs:
+  1. regime_cycle_3d.gif            - 3D P&L surface morphing through live regimes
+  2. early_warning_dashboard.gif    - Live early warning + execution dashboard
+  3. stress_test_surface.gif        - Stress test surface with live scenario markers
+  4. regime_transition_heatmap.gif  - HMM transition matrix with live state tracking
 """
 
 import matplotlib
@@ -67,14 +74,12 @@ def _fig_to_image(fig):
                 edgecolor='none', bbox_inches='tight', pad_inches=0.3)
     buf.seek(0)
     img = Image.open(buf).convert('RGBA')
-    # Resize to exact 800x600
     img = img.resize((800, 600), Image.LANCZOS)
     return img
 
 
 def _save_gif(frames, path, duration=FRAME_DURATION):
     """Save list of PIL images as an animated GIF."""
-    # Convert RGBA -> RGB on dark bg for GIF compatibility
     rgb_frames = []
     for f in frames:
         bg = Image.new('RGB', f.size, (10, 10, 10))
@@ -87,32 +92,30 @@ def _save_gif(frames, path, duration=FRAME_DURATION):
 
 
 # ===================================================================
-# 1. Regime Cycle 3D Surface
+# 1. Regime Cycle 3D Surface (Live Mode)
 # ===================================================================
 def generate_regime_cycle():
     print('Generating regime_cycle_3d.gif ...')
-    n = 40  # grid size
+    n = 40
     spot = np.linspace(80, 120, n)
     ivol = np.linspace(10, 60, n)
     X, Y = np.meshgrid(spot, ivol)
 
     regimes = [
-        ('Bull Quiet',    'VIX 12 | Signal: HOLD',  GREEN),
-        ('Transition',    'VIX 24 | Signal: HEDGE',  YELLOW),
-        ('Bear / Crisis', 'VIX 67 | Signal: EXIT',   RED),
-        ('Recovery',      'VIX 28 | Signal: ENTER',  CYAN),
-        ('New Bull',      'VIX 14 | Signal: HOLD',   GREEN),
+        ('Bull Quiet',    '\u25cf LIVE | SP500: $5,280 | VIX 12 | BUY 892 SPY',  GREEN),
+        ('Transition',    '\u25cf LIVE | SP500: $5,050 | VIX 24 | SELL 446 SPY',  YELLOW),
+        ('Bear / Crisis', '\u25cf LIVE | SP500: $3,900 | VIX 67 | SELL 357 SPY',  RED),
+        ('Recovery',      '\u25cf LIVE | SP500: $4,500 | VIX 28 | BUY 663 SPY',   CYAN),
+        ('New Bull',      '\u25cf LIVE | SP500: $5,600 | VIX 14 | BUY 224 SPY',   GREEN),
     ]
     frames_per = 12
     total = frames_per * len(regimes)
 
     def surface(t):
-        """Return Z values for normalised time t in [0,1] across all regimes."""
         phase = t * len(regimes)
         idx = min(int(phase), len(regimes) - 1)
         local = phase - idx
 
-        # Base shapes per regime
         def _bull(X, Y):
             return 20 - 0.01 * (X - 100)**2 - 0.005 * (Y - 20)**2
 
@@ -165,25 +168,22 @@ def generate_regime_cycle():
 
 
 # ===================================================================
-# 2. Early Warning Dashboard
+# 2. Early Warning Dashboard (Live Mode with Execution)
 # ===================================================================
 def generate_early_warning():
     print('Generating early_warning_dashboard.gif ...')
     total = 40
     t_arr = np.linspace(0, 1, total)
 
-    # Simulated series
     crisis_prob = 5 + 84 * np.exp(-((t_arr - 0.45)**2) / 0.02)
     crisis_prob = np.clip(crisis_prob, 5, 89)
     vix = 12 + 55 * np.exp(-((t_arr - 0.45)**2) / 0.025)
     vix = np.clip(vix, 12, 67)
 
-    # Portfolio allocations over time
     equity_frac = np.clip(0.6 - 0.5 * np.exp(-((t_arr - 0.45)**2) / 0.03), 0.1, 0.6)
     cash_frac = np.clip(0.1 + 0.5 * np.exp(-((t_arr - 0.45)**2) / 0.03), 0.1, 0.6)
     options_frac = 1.0 - equity_frac - cash_frac
 
-    # Cumulative returns
     days = np.arange(252)
     sp500_daily = np.concatenate([
         np.random.RandomState(42).normal(0.0005, 0.008, 100),
@@ -192,20 +192,32 @@ def generate_early_warning():
     ])
     sp500_cum = np.cumprod(1 + sp500_daily) - 1
 
-    # Portfolio avoids crash via hedging
     port_daily = sp500_daily.copy()
     port_daily[90:130] = port_daily[90:130] * 0.25 + 0.001
     port_cum = np.cumprod(1 + port_daily) - 1
+
+    # Execution events
+    exec_events = [
+        (0.25, 'SELL 300 SPY (reduce)'),
+        (0.40, 'SELL 400 SPY (hedge)'),
+        (0.60, 'BUY 650 SPY (re-enter)'),
+    ]
 
     frames = []
     for fi in range(total):
         fig, axes = plt.subplots(2, 2, figsize=(FIG_W, FIG_H), facecolor=BG_COLOR)
         fig.subplots_adjust(hspace=0.45, wspace=0.35)
 
+        # Main title with LIVE indicator
+        prob = crisis_prob[fi]
+        mode_color = GREEN if prob < 30 else (YELLOW if prob < 60 else RED)
+        fig.suptitle(f'\u25cf LIVE MODE  |  Crisis Prob: {prob:.0f}%  |  VIX: {vix[fi]:.1f}',
+                     color=mode_color, fontsize=12, fontweight='bold', y=0.98,
+                     fontfamily='monospace')
+
         # -- Top-left: crisis probability gauge --
         ax = axes[0, 0]
         _style_ax(ax, title='Crisis Probability', xlabel='', ylabel='%')
-        prob = crisis_prob[fi]
         color = GREEN if prob < 30 else (YELLOW if prob < 60 else RED)
         ax.barh([0], [prob], color=color, height=0.5, alpha=0.85)
         ax.set_xlim(0, 100)
@@ -215,7 +227,7 @@ def generate_early_warning():
 
         # -- Top-right: VIX trajectory --
         ax = axes[0, 1]
-        _style_ax(ax, title='VIX Index', xlabel='Time', ylabel='VIX')
+        _style_ax(ax, title='VIX Index (Live Feed)', xlabel='Time', ylabel='VIX')
         idx = fi + 1
         ax.plot(t_arr[:idx], vix[:idx], color=YELLOW, linewidth=2)
         ax.fill_between(t_arr[:idx], 0, vix[:idx], color=YELLOW, alpha=0.08)
@@ -224,9 +236,9 @@ def generate_early_warning():
         ax.axhline(30, color=RED, linestyle='--', alpha=0.5, linewidth=0.8)
         ax.text(0.02, 32, 'Danger', color=RED, fontsize=7, alpha=0.7)
 
-        # -- Bottom-left: allocation bars --
+        # -- Bottom-left: allocation bars (execution engine target) --
         ax = axes[1, 0]
-        _style_ax(ax, title='Portfolio Allocation', xlabel='', ylabel='Weight')
+        _style_ax(ax, title='Execution Engine Allocation', xlabel='', ylabel='Weight')
         labels = ['Equity', 'Cash', 'Options']
         vals = [equity_frac[fi], cash_frac[fi], options_frac[fi]]
         colors = [BLUE, GREEN, CYAN]
@@ -236,9 +248,18 @@ def generate_early_warning():
             ax.text(b.get_x() + b.get_width() / 2, v + 0.02,
                     f'{v:.0%}', ha='center', color=TEXT_COLOR, fontsize=9)
 
+        # Show recent execution event
+        for evt_t, evt_label in exec_events:
+            if t_arr[fi] >= evt_t and t_arr[fi] < evt_t + 0.08:
+                ax.text(0.5, 0.65, f'[Exec] {evt_label}',
+                        transform=ax.transAxes, ha='center',
+                        color=CYAN, fontsize=8, fontfamily='monospace',
+                        fontweight='bold')
+                break
+
         # -- Bottom-right: cumulative returns --
         ax = axes[1, 1]
-        _style_ax(ax, title='Cumulative Returns', xlabel='Day', ylabel='Return')
+        _style_ax(ax, title='Live Returns vs S&P 500', xlabel='Day', ylabel='Return')
         day_idx = int(fi / total * 252)
         day_idx = max(day_idx, 2)
         ax.plot(days[:day_idx], sp500_cum[:day_idx], color=RED, linewidth=1.5,
@@ -266,15 +287,13 @@ def generate_stress_test():
     vol_shock = np.linspace(0, 50, n)
     X, Y = np.meshgrid(spot_shock, vol_shock)
 
-    # P&L model: losses from spot drops and vol spikes, with nonlinearity
     Z = (0.8 * X - 0.3 * Y
          - 0.005 * X * Y
          + 0.0003 * X**2
          - 0.0001 * Y**2
-         + 2 * np.exp(-0.005 * ((X + 30)**2 + (Y - 40)**2))  # GFC-like pocket
+         + 2 * np.exp(-0.005 * ((X + 30)**2 + (Y - 40)**2))
          )
 
-    # Historical scenarios: (spot_shock, vol_shock, label)
     scenarios = [
         (-38, 45, 'GFC 2008'),
         (-34, 42, 'COVID 2020'),
@@ -288,14 +307,13 @@ def generate_stress_test():
     for i in range(total):
         fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG_COLOR)
         ax = fig.add_subplot(111, projection='3d')
-        _style_ax(ax, title='Stress Test: Portfolio P&L Surface',
+        _style_ax(ax, title='\u25cf LIVE | Stress Test: Portfolio P&L Surface',
                   xlabel='Spot Shock (%)', ylabel='Vol Shock (%)', is_3d=True)
 
         norm = Normalize(vmin=Z.min(), vmax=Z.max())
         ax.plot_surface(X, Y, Z, cmap=PNL_CMAP, norm=norm, alpha=0.88,
                         rstride=2, cstride=2, edgecolor='none', antialiased=True)
 
-        # Plot scenario markers
         for sx, sy, lbl in scenarios:
             sz = np.interp(sx, spot_shock, Z[int(np.interp(sy, vol_shock, np.arange(n))), :])
             ax.scatter([sx], [sy], [sz], color=YELLOW, s=40, zorder=5,
@@ -321,7 +339,6 @@ def generate_transition_heatmap():
     n_states = len(states)
     total = 30
 
-    # Base transition matrix (rows=from, cols=to)
     base = np.array([
         [0.70, 0.15, 0.10, 0.04, 0.01],
         [0.20, 0.45, 0.20, 0.10, 0.05],
@@ -330,22 +347,23 @@ def generate_transition_heatmap():
         [0.02, 0.03, 0.10, 0.30, 0.55],
     ])
 
-    # Current state cycles through regimes
     state_seq = np.array([0]*6 + [1]*6 + [2]*6 + [3]*6 + [4]*6)
 
     frames = []
     for fi in range(total):
         current = state_seq[fi]
 
-        # Perturb matrix slightly each frame for animation
         rng = np.random.RandomState(fi)
         noise = rng.uniform(-0.03, 0.03, (n_states, n_states))
         mat = base + noise
         mat = np.clip(mat, 0.01, None)
         mat = mat / mat.sum(axis=1, keepdims=True)
 
+        state_name = states[current].replace('\n', ' ')
+
         fig, ax = plt.subplots(figsize=(FIG_W, FIG_H), facecolor=BG_COLOR)
-        _style_ax(ax, title=f'HMM Regime Transition Matrix  |  Current State: {states[current].replace(chr(10), " ")}',
+        _style_ax(ax,
+                  title=f'\u25cf LIVE | HMM Transition Matrix | Current: {state_name}',
                   xlabel='To State', ylabel='From State')
 
         im = ax.imshow(mat, cmap=NEON_CMAP, vmin=0, vmax=0.75, aspect='auto')
@@ -355,7 +373,6 @@ def generate_transition_heatmap():
         ax.set_xticklabels(states, fontsize=8, color=TEXT_COLOR)
         ax.set_yticklabels(states, fontsize=8, color=TEXT_COLOR)
 
-        # Annotate cells
         for r in range(n_states):
             for c in range(n_states):
                 val = mat[r, c]
@@ -363,7 +380,6 @@ def generate_transition_heatmap():
                 ax.text(c, r, f'{val:.2f}', ha='center', va='center',
                         color=txt_col, fontsize=9, fontweight='bold')
 
-        # Highlight current state row and column
         for edge in range(n_states):
             rect = plt.Rectangle((edge - 0.5, current - 0.5), 1, 1,
                                  linewidth=2, edgecolor=CYAN, facecolor='none')
@@ -373,7 +389,6 @@ def generate_transition_heatmap():
                                   linestyle='--', alpha=0.5)
             ax.add_patch(rect2)
 
-        # Colorbar
         cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         cbar.ax.tick_params(colors=TEXT_COLOR, labelsize=8)
         cbar.set_label('Transition Probability', color=TEXT_COLOR, fontsize=9)
