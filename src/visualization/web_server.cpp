@@ -400,16 +400,16 @@ std::string WebServer::getIndexHtml() {
                 <div class="metric-label">Sharpe Ratio</div>
             </div>
             <div class="metric">
+                <div id="m-sortino" class="metric-value metric-blue">--</div>
+                <div class="metric-label">Sortino Ratio</div>
+            </div>
+            <div class="metric">
+                <div id="m-calmar" class="metric-value metric-blue">--</div>
+                <div class="metric-label">Calmar Ratio</div>
+            </div>
+            <div class="metric">
                 <div id="m-drawdown" class="metric-value metric-red">--</div>
                 <div class="metric-label">Max Drawdown</div>
-            </div>
-            <div class="metric">
-                <div id="m-delta" class="metric-value metric-blue">--</div>
-                <div class="metric-label">Portfolio Delta</div>
-            </div>
-            <div class="metric">
-                <div id="m-vega" class="metric-value metric-yellow">--</div>
-                <div class="metric-label">Portfolio Vega</div>
             </div>
         </div>
     </div>
@@ -633,9 +633,9 @@ function updateDashboard(data) {
     document.getElementById('m-alpha').textContent = ((p.portfolioReturn - p.benchmarkReturn) * 100).toFixed(2) + '%';
     document.getElementById('m-alpha').className = 'metric-value ' + (p.portfolioReturn > p.benchmarkReturn ? 'metric-green' : 'metric-red');
     document.getElementById('m-sharpe').textContent = p.sharpe.toFixed(2);
+    document.getElementById('m-sortino').textContent = (p.sortino || 0).toFixed(2);
+    document.getElementById('m-calmar').textContent = (p.calmar || 0).toFixed(2);
     document.getElementById('m-drawdown').textContent = (p.maxDrawdown * 100).toFixed(1) + '%';
-    document.getElementById('m-delta').textContent = p.delta.toFixed(2);
-    document.getElementById('m-vega').textContent = p.vega.toFixed(2);
 
     // Signal card
     const sig = data.signal;

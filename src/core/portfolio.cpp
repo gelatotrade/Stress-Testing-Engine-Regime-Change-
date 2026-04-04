@@ -91,6 +91,8 @@ PortfolioState Portfolio::computeState(const MarketSnapshot& market) const {
     }
 
     state.sharpe_ratio = sharpeRatio();
+    state.sortino_ratio = sortinoRatio();
+    state.calmar_ratio = calmarRatio();
     state.max_drawdown = max_drawdown_;
     state.portfolio_return = cumulative_return_;
     state.benchmark_return = benchmark_cumulative_;
@@ -270,6 +272,34 @@ double Portfolio::sharpeRatio() const {
     double s = math::stddev(portfolio_returns_);
     if (s < 1e-15) return 0.0;
     return (m * 252.0) / (s * std::sqrt(252.0));  // annualized
+}
+
+double Portfolio::sortinoRatio() const {
+    if (portfolio_returns_.size() < 2) return 0.0;
+    double m = math::mean(portfolio_returns_);
+
+    // Downside deviation: std dev of negative returns only
+    double sum_sq = 0.0;
+    int count = 0;
+    for (double r : portfolio_returns_) {
+        if (r < 0.0) {
+            sum_sq += r * r;
+        }
+        count++;
+    }
+    if (count == 0) return 0.0;
+    double downside_dev = std::sqrt(sum_sq / count);
+    if (downside_dev < 1e-15) return (m > 0) ? 99.0 : 0.0;  // cap at 99 if no downside
+
+    return (m * 252.0) / (downside_dev * std::sqrt(252.0));  // annualized
+}
+
+double Portfolio::calmarRatio() const {
+    if (portfolio_returns_.size() < 2 || max_drawdown_ < 1e-15) return 0.0;
+    // Annualized return / max drawdown
+    double periods = static_cast<double>(portfolio_returns_.size());
+    double annual_return = cumulative_return_ * (252.0 / periods);
+    return annual_return / max_drawdown_;
 }
 
 double Portfolio::maxDrawdown() const { return max_drawdown_; }

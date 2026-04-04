@@ -167,8 +167,10 @@ int runSimulation(int port, int sim_days, int speed_ms, double initial_price,
                       << state.portfolio_return * 100.0 << "%"
                       << " | Benchmark: " << state.benchmark_return * 100.0 << "%"
                       << " | Alpha: "
-                      << (state.portfolio_return - state.benchmark_return) * 100.0 << "%"
-                      << " | Sharpe: " << state.sharpe_ratio
+                      << (state.portfolio_return - state.benchmark_return) * 100.0 << "%\n"
+                      << "  Sharpe: " << state.sharpe_ratio
+                      << " | Sortino: " << state.sortino_ratio
+                      << " | Calmar: " << state.calmar_ratio
                       << " | MaxDD: " << std::setprecision(1)
                       << state.max_drawdown * 100.0 << "%\n";
             std::cout << "  Greeks: Delta=" << std::setprecision(2) << state.total_delta
@@ -196,6 +198,8 @@ int runSimulation(int port, int sim_days, int speed_ms, double initial_price,
               << "  SP500 Return:     " << final_state.benchmark_return * 100.0 << "%\n"
               << "  Alpha:            " << (final_state.portfolio_return - final_state.benchmark_return) * 100.0 << "%\n"
               << "  Sharpe Ratio:     " << final_state.sharpe_ratio << "\n"
+              << "  Sortino Ratio:    " << final_state.sortino_ratio << "\n"
+              << "  Calmar Ratio:     " << final_state.calmar_ratio << "\n"
               << "  Max Drawdown:     " << std::setprecision(1) << final_state.max_drawdown * 100.0 << "%\n"
               << "  Regime Changes:   " << detector.regimeHistory().size() << "\n\n";
 
@@ -370,7 +374,9 @@ int runLive(int port, bool headless, ste::Timeframe timeframe,
                       << port_state.portfolio_return * 100.0 << "%"
                       << " | Benchmark=" << port_state.benchmark_return * 100.0 << "%"
                       << " | Alpha=" << (port_state.portfolio_return - port_state.benchmark_return) * 100.0 << "%"
-                      << " | Sharpe=" << port_state.sharpe_ratio << "\n";
+                      << "\n  Sharpe=" << port_state.sharpe_ratio
+                      << " | Sortino=" << port_state.sortino_ratio
+                      << " | Calmar=" << port_state.calmar_ratio << "\n";
         }
 
         last_regime = regime_state.current_regime;

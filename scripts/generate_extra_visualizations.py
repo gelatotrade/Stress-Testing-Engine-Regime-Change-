@@ -36,14 +36,25 @@ DIM      = '#444466'
 
 PNL_CMAP = LinearSegmentedColormap.from_list('pnl', [RED, '#ff6600', YELLOW, GREEN, CYAN])
 
+# High-contrast per-regime colormaps
+CMAP_BULL = LinearSegmentedColormap.from_list('bull', [
+    '#003310', '#005522', '#00aa44', '#00ff88', '#88ffbb', '#ccffee'])
+CMAP_TRANS = LinearSegmentedColormap.from_list('trans', [
+    '#331100', '#884400', '#cc7700', '#ffaa00', '#ffcc44', '#ffee88'])
+CMAP_CRISIS = LinearSegmentedColormap.from_list('crisis', [
+    '#110000', '#440000', '#990000', '#ff0022', '#ff4444', '#ff8866'])
+CMAP_RECOV = LinearSegmentedColormap.from_list('recov', [
+    '#001133', '#003366', '#0066aa', '#0099ee', '#44bbff', '#88ddff'])
+REGIME_CMAPS = [CMAP_BULL, CMAP_TRANS, CMAP_CRISIS, CMAP_RECOV, CMAP_BULL]
+
 OUT_DIR = Path(__file__).resolve().parent.parent / 'docs' / 'img'
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-DPI = 100
-FRAME_MS = 160
+DPI = 150        # was 100
+FRAME_MS = 150
 
 
-def fig_to_img(fig, w=1200, h=700):
+def fig_to_img(fig, w=1400, h=820):
     buf = io.BytesIO()
     fig.savefig(buf, format='png', dpi=DPI, facecolor=fig.get_facecolor(),
                 edgecolor='none', bbox_inches='tight', pad_inches=0.25)
@@ -68,27 +79,28 @@ def save_gif(frames, path, duration=FRAME_MS):
 # ===================================================================
 def generate_regime_phases():
     print('Generating regime_phases_comparison.gif ...')
-    n = 35
-    spot = np.linspace(80, 120, n)
-    ivol = np.linspace(10, 55, n)
+    n = 55  # was 35
+    spot = np.linspace(78, 122, n)
+    ivol = np.linspace(8, 58, n)
     X, Y = np.meshgrid(spot, ivol)
 
     def bull_quiet(X, Y):
-        return 22 - 0.012*(X-100)**2 - 0.005*(Y-18)**2
+        return 28 - 0.014*(X-100)**2 - 0.006*(Y-16)**2
 
     def transition(X, Y, ripple=1.0):
-        base = 8 - 0.009*(X-100)**2 - 0.004*(Y-28)**2
-        return base + ripple*4*np.sin(0.35*X)*np.cos(0.25*Y)
+        base = 10 - 0.010*(X-100)**2 - 0.005*(Y-28)**2
+        waves = ripple * 6 * np.sin(0.4*X) * np.cos(0.3*Y)
+        return base + waves
 
     def crisis(X, Y):
-        return -18 + 0.006*(X-92)**2 + 0.003*(Y-50)**2 \
-               - 10*np.exp(-0.012*((X-88)**2 + (Y-52)**2))
+        crater = -10 * np.exp(-0.015*((X-88)**2 + (Y-52)**2))
+        return -22 + 0.007*(X-92)**2 + 0.004*(Y-50)**2 + crater
 
     def recovery(X, Y, frac=0.5):
-        return (-6 + 18*frac) - 0.007*(X-100)**2 - 0.004*(Y-32)**2
+        return (-8 + 24*frac) - 0.008*(X-100)**2 - 0.005*(Y-30)**2
 
     def new_bull(X, Y):
-        return 20 - 0.011*(X-102)**2 - 0.005*(Y-16)**2
+        return 26 - 0.013*(X-102)**2 - 0.006*(Y-15)**2
 
     phases = [
         ('BULL QUIET',    GREEN,
@@ -113,7 +125,7 @@ def generate_regime_phases():
          lambda X,Y,t: new_bull(X,Y)),
     ]
 
-    frames_per_phase = 14
+    frames_per_phase = 16  # was 14
     total = frames_per_phase * len(phases)
 
     tl_starts = [0, 0.16, 0.25, 0.37, 0.53]
@@ -129,7 +141,7 @@ def generate_regime_phases():
 
         Z = surf_fn(X, Y, local_t)
 
-        fig = plt.figure(figsize=(12, 7), facecolor=BG)
+        fig = plt.figure(figsize=(14, 8.2), facecolor=BG)
         gs = gridspec.GridSpec(5, 1, height_ratios=[0.6, 0.1, 5.5, 0.5, 0.8],
                                hspace=0.05)
 
@@ -139,33 +151,56 @@ def generate_regime_phases():
         ax_title.axis('off')
         ax_title.text(0.5, 0.5,
                       f'\u25cf LIVE MODE  //  Regime: {name}  //  Execution Engine Active',
-                      color=color, fontsize=16, fontweight='bold',
+                      color=color, fontsize=18, fontweight='bold',
                       ha='center', va='center', transform=ax_title.transAxes,
                       family='monospace')
 
         ax_sp = fig.add_subplot(gs[1])
         ax_sp.set_facecolor(BG); ax_sp.axis('off')
 
-        # --- 3D Surface ---
+        # --- 3D Surface (high quality) ---
         ax3d = fig.add_subplot(gs[2], projection='3d')
         ax3d.set_facecolor(BG)
         ax3d.xaxis.pane.fill = False; ax3d.yaxis.pane.fill = False; ax3d.zaxis.pane.fill = False
-        ax3d.xaxis.pane.set_edgecolor(GRID_C)
-        ax3d.yaxis.pane.set_edgecolor(GRID_C)
-        ax3d.zaxis.pane.set_edgecolor(GRID_C)
-        ax3d.grid(True, color=GRID_C, alpha=0.3)
-        ax3d.tick_params(colors=DIM, labelsize=7)
+        ax3d.xaxis.pane.set_edgecolor('#1a1a2e')
+        ax3d.yaxis.pane.set_edgecolor('#1a1a2e')
+        ax3d.zaxis.pane.set_edgecolor('#1a1a2e')
+        ax3d.grid(True, color='#223344', alpha=0.2)
+        ax3d.tick_params(colors='#556677', labelsize=7)
 
-        norm = Normalize(vmin=-28, vmax=28)
-        ax3d.plot_surface(X, Y, Z, cmap=PNL_CMAP, norm=norm, alpha=0.92,
-                          rstride=2, cstride=2, edgecolor='none', antialiased=True)
-        ax3d.set_zlim(-32, 32)
-        ax3d.set_xlabel('Spot Price ($)', color=DIM, fontsize=8, labelpad=5)
-        ax3d.set_ylabel('Implied Vol (%)', color=DIM, fontsize=8, labelpad=5)
-        ax3d.set_zlabel('P&L ($K)', color=DIM, fontsize=8, labelpad=5)
+        # Per-regime colormap
+        rcmap = REGIME_CMAPS[phase_idx]
+        z_min, z_max = Z.min(), Z.max()
+        z_range = z_max - z_min if z_max > z_min else 1.0
+        z_norm_arr = (Z - z_min) / z_range
+        face_colors = rcmap(z_norm_arr)
 
-        azim = 210 + fi * 1.8
-        ax3d.view_init(elev=26, azim=azim)
+        ax3d.plot_surface(X, Y, Z, facecolors=face_colors, alpha=0.93,
+                          rstride=1, cstride=1, edgecolor='none', antialiased=True,
+                          shade=True)
+
+        # Wireframe for depth
+        ax3d.plot_wireframe(X[::4, ::4], Y[::4, ::4], Z[::4, ::4],
+                            color='white', alpha=0.05, linewidth=0.3)
+
+        # Floor contour
+        z_floor = z_min - z_range * 0.15
+        try:
+            ax3d.contour(X, Y, Z, levels=np.linspace(z_min, z_max, 8),
+                         zdir='z', offset=z_floor, cmap=rcmap, alpha=0.3, linewidths=0.5)
+        except Exception:
+            pass
+
+        ax3d.set_zlim(z_floor, z_max + z_range * 0.1)
+        ax3d.set_xlabel('Spot Price ($)', color=DIM, fontsize=9, labelpad=8)
+        ax3d.set_ylabel('Implied Vol (%)', color=DIM, fontsize=9, labelpad=8)
+        ax3d.set_zlabel('P&L ($K)', color=DIM, fontsize=9, labelpad=8)
+
+        # Camera elevation varies by regime
+        elevations = [30, 26, 20, 28, 30]
+        elev = elevations[phase_idx]
+        azim = 210 + fi * 1.6
+        ax3d.view_init(elev=elev, azim=azim)
 
         # --- Info panel with execution data ---
         ax_info = fig.add_subplot(gs[3])
@@ -228,10 +263,10 @@ def generate_performance_chart():
 
     # Engine portfolio: execution engine hedges during transition/crisis
     port_ret = sp_ret.copy()
-    port_ret[180:240] = sp_ret[180:240] * 0.4 + 0.0003   # reduce exposure
-    port_ret[240:340] = sp_ret[240:340] * 0.18 + 0.0005   # heavy hedge, 20% exposure
-    port_ret[340:460] = sp_ret[340:460] * 1.3 + 0.0003    # re-enter aggressively
-    port_ret[460:] = sp_ret[460:] * 1.1 + 0.0002          # full exposure + premium
+    port_ret[180:240] = sp_ret[180:240] * 0.4 + 0.0003
+    port_ret[240:340] = sp_ret[240:340] * 0.18 + 0.0005
+    port_ret[340:460] = sp_ret[340:460] * 1.3 + 0.0003
+    port_ret[460:] = sp_ret[460:] * 1.1 + 0.0002
 
     port_cum = np.cumprod(1 + port_ret) - 1
 
@@ -240,6 +275,33 @@ def generate_performance_chart():
     port_dd = (port_peak - (1 + port_cum)) / port_peak
     sp_peak = np.maximum.accumulate(1 + sp_cum)
     sp_dd = (sp_peak - (1 + sp_cum)) / sp_peak
+
+    # Compute rolling Sharpe, Sortino, Calmar
+    def rolling_sharpe(rets, window=60):
+        out = np.zeros(len(rets))
+        for i in range(len(rets)):
+            w = rets[max(0,i-window):i+1]
+            if len(w) < 5:
+                out[i] = 0
+            else:
+                std = np.std(w)
+                out[i] = (np.mean(w) * 252) / (std * np.sqrt(252)) if std > 1e-10 else 0
+        return out
+
+    def rolling_sortino(rets, window=60):
+        out = np.zeros(len(rets))
+        for i in range(len(rets)):
+            w = rets[max(0,i-window):i+1]
+            if len(w) < 5:
+                out[i] = 0
+            else:
+                neg = w[w < 0]
+                dd = np.sqrt(np.mean(neg**2)) if len(neg) > 0 else 1e-10
+                out[i] = (np.mean(w) * 252) / (dd * np.sqrt(252)) if dd > 1e-10 else 0
+        return out
+
+    port_sharpe = rolling_sharpe(port_ret)
+    port_sortino = rolling_sortino(port_ret)
 
     # Execution engine trades at regime boundaries
     trade_days = [0, 180, 240, 340, 460]
@@ -257,7 +319,7 @@ def generate_performance_chart():
 
     frames = []
     for fi, d in enumerate(day_indices):
-        fig = plt.figure(figsize=(12, 7), facecolor=BG)
+        fig = plt.figure(figsize=(14, 8.5), facecolor=BG)
         gs = gridspec.GridSpec(3, 2, height_ratios=[0.5, 4, 2.5],
                                width_ratios=[3, 1], hspace=0.35, wspace=0.25)
 
@@ -275,14 +337,17 @@ def generate_performance_chart():
         port_ret_now = port_cum[d-1]*100 if d > 0 else 0
         sp_ret_now = sp_cum[d-1]*100 if d > 0 else 0
         alpha_now = port_ret_now - sp_ret_now
+        sharpe_now = port_sharpe[min(d-1, len(port_sharpe)-1)] if d > 0 else 0
+        sortino_now = port_sortino[min(d-1, len(port_sortino)-1)] if d > 0 else 0
 
-        ax_t.text(0.5, 0.6,
+        ax_t.text(0.5, 0.65,
                   f'\u25cf LIVE  |  PORTFOLIO vs S&P 500  |  Day {d}/{days}  |  Regime: {rn}',
-                  color=rc, fontsize=14, fontweight='bold', ha='center', va='center',
+                  color=rc, fontsize=15, fontweight='bold', ha='center', va='center',
                   transform=ax_t.transAxes, family='monospace')
-        ax_t.text(0.5, 0.1,
-                  f'Portfolio: {port_ret_now:+.1f}%    S&P 500: {sp_ret_now:+.1f}%    Alpha: {alpha_now:+.1f}%',
-                  color=TEXT, fontsize=11, ha='center', va='center',
+        ax_t.text(0.5, 0.12,
+                  f'Portfolio: {port_ret_now:+.1f}%    S&P 500: {sp_ret_now:+.1f}%    '
+                  f'Alpha: {alpha_now:+.1f}%    Sharpe: {sharpe_now:.2f}    Sortino: {sortino_now:.2f}',
+                  color=TEXT, fontsize=10, ha='center', va='center',
                   transform=ax_t.transAxes, family='monospace')
 
         # --- Main return chart ---
@@ -308,10 +373,10 @@ def generate_performance_chart():
                               alpha=0.6, family='monospace')
 
         x = np.arange(d)
-        ax_r.plot(x, sp_cum[:d]*100, color=RED, linewidth=1.5, alpha=0.7, label='S&P 500')
+        ax_r.plot(x, sp_cum[:d]*100, color=RED, linewidth=1.8, alpha=0.7, label='S&P 500')
         ax_r.fill_between(x, 0, sp_cum[:d]*100, color=RED, alpha=0.04)
-        ax_r.plot(x, port_cum[:d]*100, color=GREEN, linewidth=2.5, label='Engine Portfolio')
-        ax_r.fill_between(x, 0, port_cum[:d]*100, color=GREEN, alpha=0.06)
+        ax_r.plot(x, port_cum[:d]*100, color=GREEN, linewidth=2.8, label='Engine Portfolio')
+        ax_r.fill_between(x, 0, port_cum[:d]*100, color=GREEN, alpha=0.08)
 
         # Mark execution engine trades
         for ti, td in enumerate(trade_days):
@@ -320,22 +385,32 @@ def generate_performance_chart():
                 y_pos = ax_r.get_ylim()[1]*0.85 - (ti % 2)*5
                 ax_r.annotate(trade_labels[ti], xy=(td, port_cum[td]*100),
                              xytext=(td+15, y_pos),
-                             color=trade_colors[ti], fontsize=6,
+                             color=trade_colors[ti], fontsize=7,
                              fontfamily='monospace', alpha=0.8,
                              arrowprops=dict(arrowstyle='->', color=trade_colors[ti], alpha=0.4))
 
         ax_r.axhline(0, color=DIM, linewidth=0.8, linestyle='--', alpha=0.5)
-        ax_r.legend(fontsize=8, loc='upper left', facecolor=BG2,
+        ax_r.legend(fontsize=9, loc='upper left', facecolor=BG2,
                     edgecolor=GRID_C, labelcolor=TEXT)
 
         # --- Stats panel ---
         ax_s = fig.add_subplot(gs[1, 1])
         ax_s.set_facecolor(BG2); ax_s.axis('off')
 
+        calmar_now = 0.0
+        if d > 5:
+            mdd = port_dd[:d].max()
+            if mdd > 1e-10:
+                ann_ret = port_cum[d-1] * (252.0 / d)
+                calmar_now = ann_ret / mdd
+
         stats = [
             ('PORTFOLIO', GREEN),
             (f'Return: {port_ret_now:+.1f}%', GREEN),
             (f'MaxDD: {port_dd[:d].max()*100:.1f}%', YELLOW if port_dd[:d].max()<0.15 else RED),
+            (f'Sharpe:  {sharpe_now:.2f}', BLUE),
+            (f'Sortino: {sortino_now:.2f}', BLUE),
+            (f'Calmar:  {calmar_now:.2f}', BLUE),
             ('', TEXT),
             ('S&P 500', RED),
             (f'Return: {sp_ret_now:+.1f}%', RED),
@@ -348,10 +423,11 @@ def generate_performance_chart():
             ('Mode: Paper', DIM),
         ]
 
+        header_idx = {0, 7, 11, 13}
         for si, (txt, col) in enumerate(stats):
-            y = 0.95 - si * 0.075
-            fs = 11 if si in (0, 4, 8, 10) else 9
-            fw = 'bold' if si in (0, 4, 8, 10) else 'normal'
+            y = 0.97 - si * 0.062
+            fs = 11 if si in header_idx else 9
+            fw = 'bold' if si in header_idx else 'normal'
             ax_s.text(0.1, y, txt, color=col, fontsize=fs, fontweight=fw,
                       transform=ax_s.transAxes, family='monospace')
 
@@ -408,7 +484,7 @@ def generate_performance_chart():
                        ha='left', va='center', transform=ax_al.transAxes,
                        family='monospace', fontweight='bold')
 
-        frames.append(fig_to_img(fig, 1200, 700))
+        frames.append(fig_to_img(fig, 1400, 820))
         plt.close(fig)
 
     save_gif(frames, OUT_DIR / 'performance_vs_sp500.gif', duration=FRAME_MS)

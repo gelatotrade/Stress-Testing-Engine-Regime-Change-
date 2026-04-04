@@ -39,7 +39,18 @@ NEON_CMAP = LinearSegmentedColormap.from_list(
 PNL_CMAP = LinearSegmentedColormap.from_list(
     'pnl', [RED, '#ff6600', YELLOW, GREEN, CYAN])
 
-FIG_W, FIG_H, DPI = 8, 6, 100
+# Per-regime colormaps for high contrast
+CMAP_BULL = LinearSegmentedColormap.from_list('bull', [
+    '#003310', '#005522', '#00aa44', '#00ff88', '#88ffbb', '#ccffee'])
+CMAP_TRANS = LinearSegmentedColormap.from_list('trans', [
+    '#331100', '#884400', '#cc7700', '#ffaa00', '#ffcc44', '#ffee88'])
+CMAP_CRISIS = LinearSegmentedColormap.from_list('crisis', [
+    '#110000', '#440000', '#990000', '#ff0022', '#ff4444', '#ff8866'])
+CMAP_RECOV = LinearSegmentedColormap.from_list('recov', [
+    '#001133', '#003366', '#0066aa', '#0099ee', '#44bbff', '#88ddff'])
+REGIME_CMAPS = [CMAP_BULL, CMAP_TRANS, CMAP_CRISIS, CMAP_RECOV, CMAP_BULL]
+
+FIG_W, FIG_H, DPI = 10, 7.5, 150
 FRAME_DURATION = 150  # ms
 
 OUT_DIR = Path(__file__).resolve().parent.parent / 'docs' / 'img'
@@ -74,7 +85,7 @@ def _fig_to_image(fig):
                 edgecolor='none', bbox_inches='tight', pad_inches=0.3)
     buf.seek(0)
     img = Image.open(buf).convert('RGBA')
-    img = img.resize((800, 600), Image.LANCZOS)
+    img = img.resize((1200, 900), Image.LANCZOS)
     return img
 
 
@@ -96,38 +107,41 @@ def _save_gif(frames, path, duration=FRAME_DURATION):
 # ===================================================================
 def generate_regime_cycle():
     print('Generating regime_cycle_3d.gif ...')
-    n = 40
-    spot = np.linspace(80, 120, n)
-    ivol = np.linspace(10, 60, n)
+    n = 55
+    spot = np.linspace(78, 122, n)
+    ivol = np.linspace(8, 62, n)
     X, Y = np.meshgrid(spot, ivol)
 
     regimes = [
-        ('Bull Quiet',    '\u25cf LIVE | SP500: $5,280 | VIX 12 | BUY 892 SPY',  GREEN),
-        ('Transition',    '\u25cf LIVE | SP500: $5,050 | VIX 24 | SELL 446 SPY',  YELLOW),
-        ('Bear / Crisis', '\u25cf LIVE | SP500: $3,900 | VIX 67 | SELL 357 SPY',  RED),
-        ('Recovery',      '\u25cf LIVE | SP500: $4,500 | VIX 28 | BUY 663 SPY',   CYAN),
-        ('New Bull',      '\u25cf LIVE | SP500: $5,600 | VIX 14 | BUY 224 SPY',   GREEN),
+        ('BULL QUIET',    '\u25cf LIVE | SP500: $5,280 | VIX 12 | Signal: STRONG BUY | BUY 892 SPY',  GREEN),
+        ('TRANSITION',    '\u25cf LIVE | SP500: $5,050 | VIX 24 | Signal: REDUCE RISK | SELL 446 SPY', YELLOW),
+        ('BEAR VOLATILE', '\u25cf LIVE | SP500: $3,900 | VIX 67 | Signal: CRISIS | SELL 357 SPY',      RED),
+        ('RECOVERY',      '\u25cf LIVE | SP500: $4,500 | VIX 28 | Signal: BUY | BUY 663 SPY',          CYAN),
+        ('NEW BULL',      '\u25cf LIVE | SP500: $5,600 | VIX 14 | Signal: STRONG BUY | BUY 224 SPY',   GREEN),
     ]
-    frames_per = 12
+    elevations = [30, 26, 20, 28, 30]
+    frames_per = 16
     total = frames_per * len(regimes)
+
+    def _bull(X, Y):
+        return 28 - 0.014 * (X - 100)**2 - 0.006 * (Y - 16)**2
+
+    def _transition(X, Y, ripple):
+        base = 10 - 0.010 * (X - 100)**2 - 0.005 * (Y - 28)**2
+        waves = ripple * 6 * np.sin(0.4 * X) * np.cos(0.3 * Y)
+        return base + waves
+
+    def _crisis(X, Y):
+        crater = -10 * np.exp(-0.015 * ((X - 88)**2 + (Y - 52)**2))
+        return -22 + 0.007 * (X - 92)**2 + 0.004 * (Y - 50)**2 + crater
+
+    def _recovery(X, Y, frac):
+        return (-8 + 24 * frac) - 0.008 * (X - 100)**2 - 0.005 * (Y - 30)**2
 
     def surface(t):
         phase = t * len(regimes)
         idx = min(int(phase), len(regimes) - 1)
         local = phase - idx
-
-        def _bull(X, Y):
-            return 20 - 0.01 * (X - 100)**2 - 0.005 * (Y - 20)**2
-
-        def _transition(X, Y, ripple):
-            base = 10 - 0.008 * (X - 100)**2 - 0.004 * (Y - 30)**2
-            return base + ripple * 3 * np.sin(0.3 * X) * np.cos(0.2 * Y)
-
-        def _crisis(X, Y):
-            return -15 + 0.005 * (X - 95)**2 + 0.003 * (Y - 50)**2 - 8 * np.exp(-0.01 * ((X - 90)**2 + (Y - 55)**2))
-
-        def _recovery(X, Y, frac):
-            return (-5 + 15 * frac) - 0.006 * (X - 100)**2 - 0.004 * (Y - 35)**2
 
         if idx == 0:
             return _bull(X, Y)
@@ -149,17 +163,48 @@ def generate_regime_cycle():
 
         fig = plt.figure(figsize=(FIG_W, FIG_H), facecolor=BG_COLOR)
         ax = fig.add_subplot(111, projection='3d')
-        _style_ax(ax, xlabel='Spot Price', ylabel='Implied Vol (%)', is_3d=True)
+        ax.set_facecolor(BG_COLOR)
+        ax.xaxis.pane.fill = False; ax.yaxis.pane.fill = False; ax.zaxis.pane.fill = False
+        ax.xaxis.pane.set_edgecolor('#1a1a2e')
+        ax.yaxis.pane.set_edgecolor('#1a1a2e')
+        ax.zaxis.pane.set_edgecolor('#1a1a2e')
+        ax.grid(True, color='#223344', alpha=0.2)
+        ax.tick_params(colors='#556677', labelsize=7)
 
-        norm = Normalize(vmin=-25, vmax=25)
-        ax.plot_surface(X, Y, Z, cmap=PNL_CMAP, norm=norm, alpha=0.92,
-                        edgecolor='none', rstride=2, cstride=2,
-                        antialiased=True)
-        ax.set_zlim(-30, 30)
-        ax.view_init(elev=28, azim=220 + i * 2)
+        # Per-regime colormap
+        rcmap = REGIME_CMAPS[regime_idx]
+        z_min, z_max = Z.min(), Z.max()
+        z_range = z_max - z_min if z_max > z_min else 1.0
+        z_norm_arr = (Z - z_min) / z_range
+        face_colors = rcmap(z_norm_arr)
 
-        ax.set_title(f'Regime: {rname}\n{rsub}',
-                     color=rcol, fontsize=13, fontweight='bold', pad=12)
+        ax.plot_surface(X, Y, Z, facecolors=face_colors, alpha=0.93,
+                        rstride=1, cstride=1, edgecolor='none',
+                        antialiased=True, shade=True)
+
+        # Wireframe overlay for depth
+        ax.plot_wireframe(X[::4, ::4], Y[::4, ::4], Z[::4, ::4],
+                          color='white', alpha=0.05, linewidth=0.3)
+
+        # Floor contour projection
+        z_floor = z_min - z_range * 0.15
+        try:
+            ax.contour(X, Y, Z, levels=np.linspace(z_min, z_max, 8),
+                       zdir='z', offset=z_floor, cmap=rcmap, alpha=0.3, linewidths=0.5)
+        except Exception:
+            pass
+
+        ax.set_zlim(z_floor, z_max + z_range * 0.1)
+        ax.set_xlabel('Spot Price ($)', color='#667788', fontsize=9, labelpad=8)
+        ax.set_ylabel('Implied Vol (%)', color='#667788', fontsize=9, labelpad=8)
+        ax.set_zlabel('P&L ($)', color='#667788', fontsize=9, labelpad=8)
+
+        elev = elevations[regime_idx]
+        ax.view_init(elev=elev, azim=215 + i * 2)
+
+        fig.suptitle(f'Regime: {rname}\n{rsub}',
+                     color=rcol, fontsize=13, fontweight='bold', y=0.96,
+                     fontfamily='monospace')
 
         frames.append(_fig_to_image(fig))
         plt.close(fig)
