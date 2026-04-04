@@ -105,16 +105,26 @@ Watch the 3D P&L surface **morph continuously** as the engine cycles through all
 
 ### Combined Dashboard: Strategy vs. S&P 500 + 3D Regime Surface
 
-The **side-by-side dashboard** shows the performance chart (left) and 3D regime surface (right) **synchronized in real-time**. As the chart progresses through trading days and regime changes, the 3D surface morphs in sync — you can see the surface shift from a smooth green dome to a red crater exactly as the drawdown hits the chart. 120 frames, fully continuous smooth transitions.
+The **side-by-side dashboard** shows the performance chart (left) and 3D regime surface (right) **synchronized in real-time**. Available for 3 timeframes: **Daily**, **Hourly (1H)**, and **Minute (1M)**. As the chart progresses through regime changes, the 3D surface morphs in sync — you can see the surface shift from a smooth green dome to a red crater exactly as the drawdown hits the chart. 120 frames each, fully continuous smooth transitions.
 
-![Combined Dashboard Animation](docs/img/combined_dashboard.gif)
+#### Daily (756 Trading Days / ~3 Years)
+
+![Combined Dashboard Daily](docs/img/combined_dashboard_daily.gif)
+
+#### Hourly (1,680 Hours / ~4 Months)
+
+![Combined Dashboard Hourly](docs/img/combined_dashboard_hourly.gif)
+
+#### Minute (2,340 Minutes / ~6 Trading Days)
+
+![Combined Dashboard Minute](docs/img/combined_dashboard_minute.gif)
 
 **Left panel:**
 - **Green line**: Strategy portfolio cumulative return
 - **Red line**: S&P 500 benchmark cumulative return
 - **Colored bands**: Regime periods (green/yellow/red/cyan)
 - **Trade markers**: Execution engine buy/sell actions with arrows
-- **White dotted line**: Current day cursor
+- **White dotted line**: Current bar cursor
 - **Lower chart**: Drawdown comparison — strategy vs. S&P 500
 
 **Right panel:**
@@ -123,7 +133,14 @@ The **side-by-side dashboard** shows the performance chart (left) and 3D regime 
 - **Wireframe + contour floor** for depth perception
 - **Camera** elevation shifts per regime (30° bull → 20° crisis → 30° recovery)
 
-**How they connect:** When the chart enters the Bear Volatile regime (day 240-340), the 3D surface simultaneously inverts into a deep red crater. When the strategy re-enters at the Recovery (day 340+), the surface reforms into an upward slope. The alpha (green above red) on the chart maps directly to the surface height difference.
+**Timeframe differences:**
+| Timeframe | Bars | Period | Drift/Vol scaling | Use case |
+|-----------|------|--------|-------------------|----------|
+| Daily | 756 | ~3 years | Base | Long-term strategy validation |
+| Hourly (1H) | 1,680 | ~4 months | daily / √6.5 | Intraday regime detection |
+| Minute (1M) | 2,340 | ~6 days | daily / √390 | High-frequency live monitoring |
+
+**How they connect:** When the chart enters the Bear Volatile regime, the 3D surface simultaneously inverts into a deep red crater. When the strategy re-enters at the Recovery, the surface reforms into an upward slope. The alpha (green above red) on the chart maps directly to the surface height difference.
 
 ---
 
@@ -384,7 +401,7 @@ pip install matplotlib numpy Pillow
 python3 scripts/generate_visualizations.py      # 4 GIFs: regime_cycle_3d, early_warning, stress_test, transition_heatmap
 python3 scripts/gen_regime_3d.py                 # 1 GIF: regime_cycle_3d (Black-Scholes based, 90 frames)
 python3 scripts/generate_extra_visualizations.py # 2 GIFs: regime_phases_comparison, performance_vs_sp500
-python3 scripts/gen_combined_dashboard.py        # 1 GIF: combined_dashboard (chart + 3D side-by-side)
+python3 scripts/gen_combined_dashboard.py        # 3 GIFs: combined_dashboard_{daily,hourly,minute}
 ```
 
 ### CLI Options
