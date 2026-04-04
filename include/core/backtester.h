@@ -12,15 +12,31 @@ namespace ste {
 // Uses expanding or rolling windows for parameter calibration.
 
 struct BacktestConfig {
-    int total_days = 756;
-    int warmup_days = 60;           // min days before trading
-    int train_window = 252;         // HMM training window (rolling)
-    int refit_interval = 63;        // refit HMM every 63 days (~quarterly)
-    int execution_delay = 1;        // trade on T+1 (avoids close-price bias)
+    Timeframe timeframe = Timeframe::Daily;
+    int total_periods = 756;            // total bars (days/hours/minutes)
+    int warmup_periods = 60;            // min bars before trading
+    int train_window = 252;             // HMM training window (rolling bars)
+    int refit_interval = 63;            // refit HMM every N bars
+    int execution_delay = 1;            // trade on T+1 bar (avoids close-price bias)
     double transaction_cost_bps = 5.0;  // 5 bps per trade
     double slippage_bps = 2.0;          // 2 bps slippage
     bool use_rolling_window = true;     // rolling vs expanding window
     double initial_capital = 1000000.0;
+
+    // Convenience: configure from a day-count, auto-scaling for timeframe
+    static BacktestConfig fromDays(int days, Timeframe tf = Timeframe::Daily) {
+        BacktestConfig cfg;
+        cfg.timeframe = tf;
+        cfg.total_periods   = daysToPeriodsCount(days, tf);
+        cfg.warmup_periods  = daysToPeriodsCount(60, tf);
+        cfg.train_window    = daysToPeriodsCount(252, tf);
+        cfg.refit_interval  = daysToPeriodsCount(63, tf);
+        cfg.execution_delay = (tf == Timeframe::Daily) ? 1 : daysToPeriodsCount(1, tf);
+        return cfg;
+    }
+
+    double periodsPerYr() const { return periodsPerYear(timeframe); }
+    double dt() const { return timeframeDt(timeframe); }
 };
 
 struct BacktestTrade {
@@ -30,10 +46,10 @@ struct BacktestTrade {
     double cost;                    // transaction costs + slippage
 };
 
-struct DailyRecord {
-    int day;
+struct PeriodRecord {
+    int period;  // bar index (day/hour/minute depending on timeframe)
     double portfolio_value;
-    double daily_return;
+    double period_return;
     double benchmark_return;
     double cumulative_return;
     double benchmark_cumulative;
@@ -48,7 +64,7 @@ struct DailyRecord {
 
 struct BacktestResult {
     // Returns
-    std::vector<DailyRecord> daily_records;
+    std::vector<PeriodRecord> period_records;
     std::vector<BacktestTrade> trades;
 
     // Performance
@@ -62,7 +78,7 @@ struct BacktestResult {
     double sortino_ratio;
     double calmar_ratio;
     double max_drawdown;
-    double max_drawdown_duration;   // days
+    double max_drawdown_duration;   // periods (bars)
     double win_rate;
     double profit_factor;
     int total_trades;
@@ -77,8 +93,8 @@ struct BacktestResult {
     double tracking_error;
 
     // Out-of-sample specific
-    int train_days;
-    int test_days;
+    int train_periods;
+    int test_periods;
     int num_refits;
 };
 

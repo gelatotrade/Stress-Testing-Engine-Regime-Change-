@@ -12,7 +12,8 @@ namespace ste {
 // Sharpe Ratio T-Test (Lo 2002 adjusted)
 // ================================================================
 HypothesisTestResult StatisticalTests::sharpeRatioTTest(
-    const std::vector<double>& returns, double risk_free_rate) {
+    const std::vector<double>& returns, double risk_free_rate,
+    double periods_per_year) {
     HypothesisTestResult r;
     r.test_name = "Sharpe Ratio t-test (Lo 2002)";
 
@@ -21,7 +22,7 @@ HypothesisTestResult StatisticalTests::sharpeRatioTTest(
         r.p_value = 1.0; r.interpretation = "Insufficient data"; return r;
     }
 
-    double rf_daily = risk_free_rate / 252.0;
+    double rf_daily = risk_free_rate / periods_per_year;
     std::vector<double> excess(n);
     for (int i = 0; i < n; ++i) excess[i] = returns[i] - rf_daily;
 
@@ -54,8 +55,8 @@ HypothesisTestResult StatisticalTests::sharpeRatioTTest(
     r.p_value = 2.0 * (1.0 - math::norm_cdf(std::abs(r.test_statistic)));
 
     // Annualized confidence interval
-    double ann_sharpe = daily_sharpe * std::sqrt(252.0 / correction);
-    double ann_se = se * std::sqrt(252.0);
+    double ann_sharpe = daily_sharpe * std::sqrt(periods_per_year / correction);
+    double ann_se = se * std::sqrt(periods_per_year);
     r.confidence_interval_lower = ann_sharpe - 1.96 * ann_se;
     r.confidence_interval_upper = ann_sharpe + 1.96 * ann_se;
 
@@ -78,7 +79,7 @@ HypothesisTestResult StatisticalTests::sharpeRatioTTest(
 // ================================================================
 HypothesisTestResult StatisticalTests::probabilisticSharpe(
     const std::vector<double>& returns, double benchmark_sharpe,
-    double risk_free_rate) {
+    double risk_free_rate, double periods_per_year) {
     HypothesisTestResult r;
     r.test_name = "Probabilistic Sharpe Ratio (PSR)";
 
@@ -87,7 +88,7 @@ HypothesisTestResult StatisticalTests::probabilisticSharpe(
         r.p_value = 1.0; r.interpretation = "Insufficient data"; return r;
     }
 
-    double rf = risk_free_rate / 252.0;
+    double rf = risk_free_rate / periods_per_year;
     std::vector<double> excess(n);
     for (int i = 0; i < n; ++i) excess[i] = returns[i] - rf;
 
@@ -96,7 +97,7 @@ HypothesisTestResult StatisticalTests::probabilisticSharpe(
     if (std_ex < 1e-15) { r.p_value = 1.0; return r; }
 
     double sr = mean_ex / std_ex;
-    double sr_star = benchmark_sharpe / std::sqrt(252.0);  // daily benchmark
+    double sr_star = benchmark_sharpe / std::sqrt(periods_per_year);  // per-period benchmark
 
     // Skewness and kurtosis of returns
     double m3 = 0, m4 = 0;
@@ -116,9 +117,9 @@ HypothesisTestResult StatisticalTests::probabilisticSharpe(
     r.test_statistic = (sr - sr_star) / se_sr;
     r.p_value = 1.0 - math::norm_cdf(r.test_statistic);
 
-    double ann_sr = sr * std::sqrt(252.0);
-    r.confidence_interval_lower = (sr - 1.96 * se_sr) * std::sqrt(252.0);
-    r.confidence_interval_upper = (sr + 1.96 * se_sr) * std::sqrt(252.0);
+    double ann_sr = sr * std::sqrt(periods_per_year);
+    r.confidence_interval_lower = (sr - 1.96 * se_sr) * std::sqrt(periods_per_year);
+    r.confidence_interval_upper = (sr + 1.96 * se_sr) * std::sqrt(periods_per_year);
     r.significant_at_05 = r.p_value < 0.05;
     r.significant_at_01 = r.p_value < 0.01;
 
@@ -285,7 +286,7 @@ HypothesisTestResult StatisticalTests::permutationTest(
         if (perm_diff >= observed_diff) extreme_count++;
     }
 
-    r.test_statistic = observed_diff * 252.0;  // annualized
+    r.test_statistic = observed_diff * 252.0;  // annualized (daily convention for comparability)
     r.p_value = static_cast<double>(extreme_count) / num_permutations;
     r.significant_at_05 = r.p_value < 0.05;
     r.significant_at_01 = r.p_value < 0.01;
@@ -293,7 +294,7 @@ HypothesisTestResult StatisticalTests::permutationTest(
     std::ostringstream ss;
     ss << "Mean excess return = " << std::fixed;
     ss.precision(4);
-    ss << observed_diff * 252 * 100 << "% annualized. p=" << r.p_value;
+    ss << observed_diff * 252.0 * 100.0 << "% annualized. p=" << r.p_value;
     r.interpretation = ss.str();
 
     return r;
@@ -341,14 +342,14 @@ std::vector<HypothesisTestResult> StatisticalTests::fdrCorrection(
 // ================================================================
 HypothesisTestResult StatisticalTests::deflatedSharpeRatio(
     const std::vector<double>& best_returns, int num_strategies_tried,
-    double risk_free_rate, unsigned seed) {
+    double risk_free_rate, unsigned seed, double periods_per_year) {
     HypothesisTestResult r;
     r.test_name = "Deflated Sharpe Ratio (DSR)";
 
     int n = static_cast<int>(best_returns.size());
     if (n < 10) { r.p_value = 1.0; return r; }
 
-    double rf = risk_free_rate / 252.0;
+    double rf = risk_free_rate / periods_per_year;
     std::vector<double> excess(n);
     for (int i = 0; i < n; ++i) excess[i] = best_returns[i] - rf;
 
@@ -362,7 +363,7 @@ HypothesisTestResult StatisticalTests::deflatedSharpeRatio(
                  - (std::log(std::log(N)) + std::log(4.0 * M_PI)) / (2.0 * std::sqrt(2.0 * log_n));
 
     // PSR against deflated benchmark
-    auto psr = probabilisticSharpe(best_returns, sr0 * std::sqrt(252.0), risk_free_rate);
+    auto psr = probabilisticSharpe(best_returns, sr0 * std::sqrt(periods_per_year), risk_free_rate, periods_per_year);
 
     r.test_statistic = psr.test_statistic;
     r.p_value = psr.p_value;
@@ -375,8 +376,8 @@ HypothesisTestResult StatisticalTests::deflatedSharpeRatio(
     ss << "Tried " << num_strategies_tried << " strategies. ";
     ss << "Expected Sharpe under null = " << std::fixed;
     ss.precision(2);
-    ss << sr0 * std::sqrt(252.0) << ". ";
-    ss << "Observed Sharpe = " << sr * std::sqrt(252.0) << ". ";
+    ss << sr0 * std::sqrt(periods_per_year) << ". ";
+    ss << "Observed Sharpe = " << sr * std::sqrt(periods_per_year) << ". ";
     ss << (r.significant_at_05 ? "SURVIVES deflation" : "DOES NOT survive deflation");
     r.interpretation = ss.str();
 
@@ -389,7 +390,7 @@ HypothesisTestResult StatisticalTests::deflatedSharpeRatio(
 HypothesisTestResult StatisticalTests::regimeValueTest(
     const std::vector<double>& strategy_returns,
     const std::vector<MarketRegime>& detected_regimes,
-    int num_permutations, unsigned seed) {
+    int num_permutations, unsigned seed, double periods_per_year) {
     HypothesisTestResult r;
     r.test_name = "Regime Detection Value Test";
 
@@ -428,7 +429,7 @@ HypothesisTestResult StatisticalTests::regimeValueTest(
         if (perm_stat >= observed_stat) extreme++;
     }
 
-    r.test_statistic = observed_stat * 252.0;
+    r.test_statistic = observed_stat * periods_per_year;
     r.p_value = static_cast<double>(extreme) / num_permutations;
     r.significant_at_05 = r.p_value < 0.05;
     r.significant_at_01 = r.p_value < 0.01;
@@ -545,26 +546,27 @@ HypothesisTestResult StatisticalTests::ljungBoxTest(
 // ================================================================
 StatisticalTests::FullTestReport StatisticalTests::fullReport(
     const BacktestResult& result,
-    const std::vector<double>& benchmark_returns) {
+    const std::vector<double>& benchmark_returns,
+    double periods_per_year) {
     FullTestReport report;
 
     // Extract returns
     std::vector<double> port_rets, regimes_vec;
     std::vector<MarketRegime> regimes;
-    for (const auto& rec : result.daily_records) {
-        port_rets.push_back(rec.daily_return);
+    for (const auto& rec : result.period_records) {
+        port_rets.push_back(rec.period_return);
         regimes.push_back(rec.regime);
     }
 
     // Sharpe tests
-    report.sharpe_ttest = sharpeRatioTTest(port_rets, 0.04);
-    report.probabilistic_sharpe = probabilisticSharpe(port_rets, 0.0, 0.04);
+    report.sharpe_ttest = sharpeRatioTTest(port_rets, 0.04, periods_per_year);
+    report.probabilistic_sharpe = probabilisticSharpe(port_rets, 0.0, 0.04, periods_per_year);
 
     // Bootstrap tests
-    auto sharpe_fn = [](const std::vector<double>& r) -> double {
+    auto sharpe_fn = [periods_per_year](const std::vector<double>& r) -> double {
         double m = math::mean(r);
         double s = math::stddev(r);
-        return s > 1e-15 ? m / s * std::sqrt(252.0) : 0.0;
+        return s > 1e-15 ? m / s * std::sqrt(periods_per_year) : 0.0;
     };
     auto return_fn = [](const std::vector<double>& r) -> double {
         double cum = 1.0;
@@ -586,7 +588,7 @@ StatisticalTests::FullTestReport StatisticalTests::fullReport(
     report.permutation_vs_benchmark = permutationTest(port_trim, bench_trim);
 
     // Regime value test
-    report.regime_value = regimeValueTest(port_trim, regimes);
+    report.regime_value = regimeValueTest(port_trim, regimes, 5000, 42, periods_per_year);
 
     // Stationarity
     report.adf_returns = adfTest(port_rets);

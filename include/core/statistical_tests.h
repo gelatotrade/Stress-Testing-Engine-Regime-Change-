@@ -29,7 +29,8 @@ public:
     // Uses Lo (2002) adjustment for autocorrelation in returns
     static HypothesisTestResult sharpeRatioTTest(
         const std::vector<double>& returns,
-        double risk_free_rate = 0.0);
+        double risk_free_rate = 0.0,
+        double periods_per_year = 252.0);
 
     // Probabilistic Sharpe Ratio (Bailey & Lopez de Prado, 2012)
     // Tests if observed Sharpe > benchmark Sharpe accounting for
@@ -37,7 +38,8 @@ public:
     static HypothesisTestResult probabilisticSharpe(
         const std::vector<double>& returns,
         double benchmark_sharpe = 0.0,
-        double risk_free_rate = 0.0);
+        double risk_free_rate = 0.0,
+        double periods_per_year = 252.0);
 
     // ================================================================
     // Bootstrap Tests
@@ -97,7 +99,8 @@ public:
         const std::vector<double>& best_returns,
         int num_strategies_tried,
         double risk_free_rate = 0.0,
-        unsigned seed = 42);
+        unsigned seed = 42,
+        double periods_per_year = 252.0);
 
     // ================================================================
     // Regime-Specific Tests
@@ -108,7 +111,8 @@ public:
         const std::vector<double>& strategy_returns,
         const std::vector<MarketRegime>& detected_regimes,
         int num_permutations = 5000,
-        unsigned seed = 42);
+        unsigned seed = 42,
+        double periods_per_year = 252.0);
 
     // ================================================================
     // Stationarity & Model Validity
@@ -144,7 +148,8 @@ public:
 
     static FullTestReport fullReport(
         const BacktestResult& result,
-        const std::vector<double>& benchmark_returns);
+        const std::vector<double>& benchmark_returns,
+        double periods_per_year = 252.0);
 };
 
 } // namespace ste

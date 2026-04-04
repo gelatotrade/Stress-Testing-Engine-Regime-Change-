@@ -67,20 +67,46 @@ MarketSnapshot MarketDataGenerator::generateNext(const MarketSnapshot& current,
     return next;
 }
 
-std::vector<MarketSnapshot> MarketDataGenerator::generateHistory(int num_days,
-                                                                   double initial_price) {
+std::vector<MarketSnapshot> MarketDataGenerator::generateHistory(int num_periods,
+                                                                   double initial_price,
+                                                                   Timeframe tf) {
     std::vector<MarketSnapshot> history;
-    history.reserve(num_days);
+    history.reserve(num_periods);
 
-    // Regime transition matrix (daily probabilities)
+    double dt = timeframeDt(tf);
+
+    // Daily regime transition probabilities
     // BullQ, BullV, BearQ, BearV, Trans
-    std::vector<std::vector<double>> transitions = {
+    std::vector<std::vector<double>> daily_transitions = {
         {0.980, 0.008, 0.005, 0.002, 0.005},  // BullQuiet
         {0.010, 0.960, 0.005, 0.010, 0.015},  // BullVolatile
         {0.005, 0.005, 0.970, 0.010, 0.010},  // BearQuiet
         {0.005, 0.010, 0.010, 0.960, 0.015},  // BearVolatile
         {0.020, 0.015, 0.020, 0.015, 0.930},  // Transition
     };
+
+    // Scale transition probabilities for sub-daily timeframes
+    // For hourly/minute bars, regimes should persist longer per-bar
+    // P_bar(stay) = P_day(stay)^(1/bars_per_day), off-diags rescaled proportionally
+    std::vector<std::vector<double>> transitions = daily_transitions;
+    if (tf != Timeframe::Daily) {
+        double bars_per_day = periodsPerYear(tf) / 252.0;
+        for (int i = 0; i < 5; ++i) {
+            double daily_stay = daily_transitions[i][i];
+            double bar_stay = std::pow(daily_stay, 1.0 / bars_per_day);
+            double daily_leave = 1.0 - daily_stay;
+            double bar_leave = 1.0 - bar_stay;
+            for (int j = 0; j < 5; ++j) {
+                if (i == j) {
+                    transitions[i][j] = bar_stay;
+                } else {
+                    // Preserve relative transition ratios
+                    transitions[i][j] = (daily_leave > 1e-15) ?
+                        daily_transitions[i][j] / daily_leave * bar_leave : bar_leave / 4.0;
+                }
+            }
+        }
+    }
 
     // Initial snapshot
     MarketSnapshot snap;
@@ -101,8 +127,8 @@ std::vector<MarketSnapshot> MarketDataGenerator::generateHistory(int num_days,
     MarketRegime regime = MarketRegime::BullQuiet;
     std::uniform_real_distribution<double> uniform(0.0, 1.0);
 
-    for (int d = 1; d < num_days; ++d) {
-        // Regime transition
+    for (int d = 1; d < num_periods; ++d) {
+        // Regime transition (scaled for timeframe)
         double u = uniform(rng_);
         double cum = 0.0;
         int r_idx = static_cast<int>(regime);
@@ -114,7 +140,7 @@ std::vector<MarketSnapshot> MarketDataGenerator::generateHistory(int num_days,
             }
         }
 
-        snap = generateNext(snap, regime, 1.0 / 252.0);
+        snap = generateNext(snap, regime, dt);
         history.push_back(snap);
     }
 

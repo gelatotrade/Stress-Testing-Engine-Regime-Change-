@@ -80,6 +80,7 @@ int main(int argc, char* argv[]) {
     int speed_ms = 100;         // ms between frames
     double initial_price = 4500.0;
     bool headless = false;
+    ste::Timeframe timeframe = ste::Timeframe::Daily;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -87,32 +88,45 @@ int main(int argc, char* argv[]) {
         else if (arg == "--days" && i + 1 < argc) sim_days = std::stoi(argv[++i]);
         else if (arg == "--speed" && i + 1 < argc) speed_ms = std::stoi(argv[++i]);
         else if (arg == "--price" && i + 1 < argc) initial_price = std::stod(argv[++i]);
+        else if (arg == "--timeframe" && i + 1 < argc) {
+            std::string tf = argv[++i];
+            if (tf == "hourly" || tf == "1h") timeframe = ste::Timeframe::Hourly;
+            else if (tf == "minute" || tf == "1m") timeframe = ste::Timeframe::Minute;
+            else timeframe = ste::Timeframe::Daily;
+        }
         else if (arg == "--headless") headless = true;
         else if (arg == "--help") {
             std::cout << "Usage: stress_engine [options]\n"
-                      << "  --port <N>     Web server port (default: 8080)\n"
-                      << "  --days <N>     Simulation days (default: 756)\n"
-                      << "  --speed <ms>   Speed in ms between frames (default: 100)\n"
-                      << "  --price <N>    Initial SP500 price (default: 4500)\n"
-                      << "  --headless     Run without web server\n"
-                      << "  --help         Show this help\n";
+                      << "  --port <N>          Web server port (default: 8080)\n"
+                      << "  --days <N>          Simulation days (default: 756)\n"
+                      << "  --timeframe <tf>    Timeframe: daily, hourly/1h, minute/1m (default: daily)\n"
+                      << "  --speed <ms>        Speed in ms between frames (default: 100)\n"
+                      << "  --price <N>         Initial SP500 price (default: 4500)\n"
+                      << "  --headless          Run without web server\n"
+                      << "  --help              Show this help\n";
             return 0;
         }
     }
+
+    // Convert sim_days to periods based on timeframe
+    int sim_periods = ste::daysToPeriodsCount(sim_days, timeframe);
 
     // Initialize components
     std::cout << "[*] Initializing market data generator...\n";
     ste::MarketDataGenerator datagen(42);
 
-    std::cout << "[*] Generating " << sim_days << " days of synthetic market data...\n";
-    auto history = datagen.generateHistory(sim_days, initial_price);
-    std::cout << "    Generated " << history.size() << " market snapshots\n";
+    std::cout << "[*] Generating " << sim_periods << " " << ste::timeframeName(timeframe)
+              << " bars (" << sim_days << " trading days) of synthetic market data...\n";
+    auto history = datagen.generateHistory(sim_periods, initial_price, timeframe);
+    std::cout << "    Generated " << history.size() << " market snapshots ("
+              << ste::timeframeName(timeframe) << " timeframe)\n";
 
     // Save generated data
     ste::CsvParser::saveMarketData("data/market_data.csv", history);
 
-    std::cout << "[*] Initializing regime detector (Hidden Markov Model)...\n";
-    ste::RegimeDetector detector;
+    std::cout << "[*] Initializing regime detector (Hidden Markov Model, "
+              << ste::timeframeName(timeframe) << ")...\n";
+    ste::RegimeDetector detector(timeframe);
 
     std::cout << "[*] Initializing portfolio...\n";
     ste::Portfolio portfolio;
@@ -138,6 +152,8 @@ int main(int argc, char* argv[]) {
 
     ste::MarketRegime last_regime = ste::MarketRegime::BullQuiet;
     int rebalance_counter = 0;
+    int print_interval = ste::daysToPeriodsCount(20, timeframe);
+    int rebalance_interval = ste::daysToPeriodsCount(20, timeframe);
 
     for (size_t day = 0; day < history.size() && g_running.load(); ++day) {
         const auto& market = history[day];
@@ -152,7 +168,7 @@ int main(int argc, char* argv[]) {
         bool regime_changed = (regime_state.current_regime != last_regime);
         rebalance_counter++;
 
-        if (regime_changed || rebalance_counter >= 20 || day == 0) {
+        if (regime_changed || rebalance_counter >= rebalance_interval || day == 0) {
             // Get strategy recommendations
             auto recommended = strategy_mgr.recommendStrategies(market, regime_state);
 
@@ -181,8 +197,8 @@ int main(int argc, char* argv[]) {
             portfolio.recordReturn(market.timestamp, port_ret, spot_ret);
         }
 
-        // Print status every 20 days or on regime change
-        if (day % 20 == 0 || regime_changed) {
+        // Print status every ~20 trading days or on regime change
+        if (day % print_interval == 0 || regime_changed) {
             if (regime_changed) {
                 std::cout << "\n\033[1m  >>> REGIME CHANGE DETECTED at day "
                           << day << " <<<\033[0m\n";

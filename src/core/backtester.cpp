@@ -17,7 +17,7 @@ double Backtester::applyFriction(double gross_return, int num_trades) const {
 BacktestResult Backtester::run(const std::vector<MarketSnapshot>& data) const {
     BacktestResult result{};
     int n = static_cast<int>(data.size());
-    if (n < config_.warmup_days + 10) return result;
+    if (n < config_.warmup_periods + 10) return result;
 
     RegimeDetector detector;
     StrategyManager strategy_mgr;
@@ -50,14 +50,14 @@ BacktestResult Backtester::run(const std::vector<MarketSnapshot>& data) const {
         benchmark_cum = (1.0 + benchmark_cum) * (1.0 + bench_ret) - 1.0;
 
         // --- Warmup: only observe, don't trade ---
-        if (day < config_.warmup_days) {
+        if (day < config_.warmup_periods) {
             detector.update(market);
             portfolio_returns.push_back(bench_ret * 0.3);  // just cash + some exposure
 
-            DailyRecord rec;
-            rec.day = day;
+            PeriodRecord rec;
+            rec.period = day;
             rec.portfolio_value = portfolio_value;
-            rec.daily_return = 0.0;
+            rec.period_return = 0.0;
             rec.benchmark_return = bench_ret;
             rec.cumulative_return = 0.0;
             rec.benchmark_cumulative = benchmark_cum;
@@ -68,7 +68,7 @@ BacktestResult Backtester::run(const std::vector<MarketSnapshot>& data) const {
             rec.crisis_prob = 0.0;
             rec.warning_score = 0.0;
             rec.num_trades = 0;
-            result.daily_records.push_back(rec);
+            result.period_records.push_back(rec);
             continue;
         }
 
@@ -76,8 +76,8 @@ BacktestResult Backtester::run(const std::vector<MarketSnapshot>& data) const {
         RegimeState regime = detector.update(market);
 
         // === KEY BIAS FIX: execution_delay ===
-        // Signal generated on day T, but trades execute on day T+execution_delay.
-        // The return attribution for day T uses the PREVIOUS day's portfolio allocation,
+        // Signal generated on bar T, but trades execute on bar T+execution_delay.
+        // The return attribution for bar T uses the PREVIOUS bar's portfolio allocation,
         // not today's new allocation. This eliminates close-price look-ahead bias.
 
         TradingSignal signal = detector.generateSignal(regime, market);
@@ -86,8 +86,8 @@ BacktestResult Backtester::run(const std::vector<MarketSnapshot>& data) const {
         double cash_pct = portfolio.cashAllocation();
         double equity_pct = 1.0 - cash_pct;
 
-        // Portfolio daily return = weighted blend of cash + market exposure
-        double risk_free_daily = prev_market.risk_free_rate / 252.0;
+        // Portfolio period return = weighted blend of cash + market exposure
+        double risk_free_daily = prev_market.risk_free_rate / config_.periodsPerYr();
         double port_ret = cash_pct * risk_free_daily + equity_pct * bench_ret;
 
         // Add options P&L (simplified: theta income minus delta*move)
@@ -151,10 +151,10 @@ BacktestResult Backtester::run(const std::vector<MarketSnapshot>& data) const {
         }
 
         // Record
-        DailyRecord rec;
-        rec.day = day;
+        PeriodRecord rec;
+        rec.period = day;
         rec.portfolio_value = portfolio_value;
-        rec.daily_return = port_ret;
+        rec.period_return = port_ret;
         rec.benchmark_return = bench_ret;
         rec.cumulative_return = portfolio_cum;
         rec.benchmark_cumulative = benchmark_cum;
@@ -165,7 +165,7 @@ BacktestResult Backtester::run(const std::vector<MarketSnapshot>& data) const {
         rec.crisis_prob = regime.crisis_probability;
         rec.warning_score = detector.earlyWarningScore();
         rec.num_trades = num_trades;
-        result.daily_records.push_back(rec);
+        result.period_records.push_back(rec);
 
         portfolio.recordReturn(market.timestamp, port_ret, bench_ret);
     }
@@ -176,9 +176,9 @@ BacktestResult Backtester::run(const std::vector<MarketSnapshot>& data) const {
     result.max_drawdown = max_dd;
     result.max_drawdown_duration = max_dd_duration;
     result.total_trades = static_cast<int>(result.trades.size());
-    result.train_days = config_.warmup_days + config_.train_window;
-    result.test_days = n - result.train_days;
-    result.num_refits = (n - config_.warmup_days) / config_.refit_interval;
+    result.train_periods = config_.warmup_periods + config_.train_window;
+    result.test_periods = n - result.train_periods;
+    result.num_refits = (n - config_.warmup_periods) / config_.refit_interval;
 
     // Compute all metrics
     computeMetrics(result);
@@ -188,16 +188,16 @@ BacktestResult Backtester::run(const std::vector<MarketSnapshot>& data) const {
 
 void Backtester::computeMetrics(BacktestResult& result) const {
     std::vector<double> port_rets, bench_rets;
-    for (const auto& rec : result.daily_records) {
-        if (rec.day >= config_.warmup_days) {
-            port_rets.push_back(rec.daily_return);
+    for (const auto& rec : result.period_records) {
+        if (rec.period >= config_.warmup_periods) {
+            port_rets.push_back(rec.period_return);
             bench_rets.push_back(rec.benchmark_return);
         }
     }
 
     if (port_rets.empty()) return;
     int n = static_cast<int>(port_rets.size());
-    double trading_days = 252.0;
+    double trading_days = config_.periodsPerYr();  // periods per year (252 for daily, 1638 for hourly, etc.)
 
     // Annualized returns
     double years = n / trading_days;
@@ -308,7 +308,7 @@ Backtester::CrossValResult Backtester::crossValidate(
 
         // Run backtest on test data
         BacktestConfig fold_config = config_;
-        fold_config.warmup_days = std::min(config_.warmup_days,
+        fold_config.warmup_periods = std::min(config_.warmup_periods,
                                             static_cast<int>(test_data.size()) / 3);
         Backtester fold_tester(fold_config);
         auto result = fold_tester.run(test_data);

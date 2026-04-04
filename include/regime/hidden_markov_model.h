@@ -8,7 +8,8 @@ public:
     explicit HiddenMarkovModel(int num_states = 5);
 
     // Initialize with default market regime parameters
-    void initMarketRegimeModel();
+    // Timeframe controls transition probabilities and return emission scaling
+    void initMarketRegimeModel(Timeframe tf = Timeframe::Daily);
 
     // Forward algorithm: compute observation probability
     double forward(const std::vector<std::vector<double>>& observations) const;

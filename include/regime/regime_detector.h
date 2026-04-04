@@ -6,7 +6,7 @@ namespace ste {
 
 class RegimeDetector {
 public:
-    RegimeDetector();
+    explicit RegimeDetector(Timeframe tf = Timeframe::Daily);
 
     // Process new market data and update regime estimate
     RegimeState update(const MarketSnapshot& snapshot);
@@ -40,6 +40,7 @@ private:
     std::vector<double> volume_history_;
     std::vector<double> spread_history_;
     int regime_duration_ = 0;
+    Timeframe timeframe_ = Timeframe::Daily;
 
     // Map HMM state index to MarketRegime
     static MarketRegime stateToRegime(int state);
