@@ -36,15 +36,15 @@ DIM      = '#444466'
 
 PNL_CMAP = LinearSegmentedColormap.from_list('pnl', [RED, '#ff6600', YELLOW, GREEN, CYAN])
 
-# High-contrast per-regime colormaps
+# Diverging per-regime colormaps (valleys = different hue from peaks)
 CMAP_BULL = LinearSegmentedColormap.from_list('bull', [
-    '#003310', '#005522', '#00aa44', '#00ff88', '#88ffbb', '#ccffee'])
+    '#0000aa', '#0055cc', '#22aa66', '#00ff88', '#eeffaa', '#ffffdd'])
 CMAP_TRANS = LinearSegmentedColormap.from_list('trans', [
-    '#331100', '#884400', '#cc7700', '#ffaa00', '#ffcc44', '#ffee88'])
+    '#440066', '#8833aa', '#cc7700', '#ffaa00', '#ffdd44', '#ffffcc'])
 CMAP_CRISIS = LinearSegmentedColormap.from_list('crisis', [
-    '#110000', '#440000', '#990000', '#ff0022', '#ff4444', '#ff8866'])
+    '#000044', '#220066', '#660088', '#cc0022', '#ff4444', '#ffcc44'])
 CMAP_RECOV = LinearSegmentedColormap.from_list('recov', [
-    '#001133', '#003366', '#0066aa', '#0099ee', '#44bbff', '#88ddff'])
+    '#330044', '#553388', '#0066aa', '#00ccee', '#66ffcc', '#eeffee'])
 REGIME_CMAPS = [CMAP_BULL, CMAP_TRANS, CMAP_CRISIS, CMAP_RECOV, CMAP_BULL]
 
 OUT_DIR = Path(__file__).resolve().parent.parent / 'docs' / 'img'
@@ -125,21 +125,48 @@ def generate_regime_phases():
          lambda X,Y,t: new_bull(X,Y)),
     ]
 
-    frames_per_phase = 16  # was 14
-    total = frames_per_phase * len(phases)
+    frames_per_phase = 12
+    trans_frames = 8  # extra frames for each regime transition
+    num_transitions = len(phases) - 1
 
     tl_starts = [0, 0.16, 0.25, 0.37, 0.53]
     tl_ends   = [0.16, 0.25, 0.37, 0.53, 1.0]
     tl_colors = [GREEN, YELLOW, RED, CYAN, GREEN]
     tl_labels = ['Bull', 'Trans', 'Crisis', 'Recov', 'New Bull']
 
+    # Build frame schedule: (phase_idx, local_t, is_transition, next_phase_idx, blend_t)
+    frame_schedule = []
+    for pi in range(len(phases)):
+        for sf in range(frames_per_phase):
+            frame_schedule.append((pi, sf / max(frames_per_phase - 1, 1), False, pi, 0.0))
+        if pi < len(phases) - 1:
+            for tf in range(trans_frames):
+                bt = (tf + 1) / (trans_frames + 1)
+                frame_schedule.append((pi, 1.0, True, pi + 1, bt))
+
+    total = len(frame_schedule)
+
+    def blend_cmap(cmap_a, cmap_b, bt, z_norm):
+        ca = cmap_a(z_norm)
+        cb = cmap_b(z_norm)
+        return ca * (1 - bt) + cb * bt
+
     frames = []
-    for fi in range(total):
-        phase_idx = fi // frames_per_phase
-        local_t = (fi % frames_per_phase) / (frames_per_phase - 1)
+    for fi, (phase_idx, local_t, is_trans, next_idx, blend_t) in enumerate(frame_schedule):
         name, color, info, surf_fn = phases[phase_idx]
 
-        Z = surf_fn(X, Y, local_t)
+        if is_trans:
+            _, ncolor, ninfo, nsurf_fn = phases[next_idx]
+            # Smoothstep blend
+            bt = blend_t * blend_t * (3 - 2 * blend_t)
+            Z_a = surf_fn(X, Y, 1.0)
+            Z_b = nsurf_fn(X, Y, 0.0)
+            Z = Z_a * (1 - bt) + Z_b * bt
+            name = f'{name} \u2192 {phases[next_idx][0]}'
+            color = ncolor
+            info = f'TRANSITIONING ({bt*100:.0f}%) | Regime shift detected'
+        else:
+            Z = surf_fn(X, Y, local_t)
 
         fig = plt.figure(figsize=(14, 8.2), facecolor=BG)
         gs = gridspec.GridSpec(5, 1, height_ratios=[0.6, 0.1, 5.5, 0.5, 0.8],
@@ -168,12 +195,14 @@ def generate_regime_phases():
         ax3d.grid(True, color='#223344', alpha=0.2)
         ax3d.tick_params(colors='#556677', labelsize=7)
 
-        # Per-regime colormap
-        rcmap = REGIME_CMAPS[phase_idx]
+        # Per-regime colormap (blended during transitions)
         z_min, z_max = Z.min(), Z.max()
         z_range = z_max - z_min if z_max > z_min else 1.0
         z_norm_arr = (Z - z_min) / z_range
-        face_colors = rcmap(z_norm_arr)
+        if is_trans:
+            face_colors = blend_cmap(REGIME_CMAPS[phase_idx], REGIME_CMAPS[next_idx], bt, z_norm_arr)
+        else:
+            face_colors = REGIME_CMAPS[phase_idx](z_norm_arr)
 
         ax3d.plot_surface(X, Y, Z, facecolors=face_colors, alpha=0.93,
                           rstride=1, cstride=1, edgecolor='none', antialiased=True,
@@ -196,9 +225,12 @@ def generate_regime_phases():
         ax3d.set_ylabel('Implied Vol (%)', color=DIM, fontsize=9, labelpad=8)
         ax3d.set_zlabel('P&L ($K)', color=DIM, fontsize=9, labelpad=8)
 
-        # Camera elevation varies by regime
+        # Camera elevation varies by regime (interpolated during transitions)
         elevations = [30, 26, 20, 28, 30]
-        elev = elevations[phase_idx]
+        if is_trans:
+            elev = elevations[phase_idx] * (1 - bt) + elevations[next_idx] * bt
+        else:
+            elev = elevations[phase_idx]
         azim = 210 + fi * 1.6
         ax3d.view_init(elev=elev, azim=azim)
 
@@ -214,16 +246,21 @@ def generate_regime_phases():
         ax_tl.set_facecolor(BG); ax_tl.axis('off')
         ax_tl.set_xlim(0, 1); ax_tl.set_ylim(0, 1)
 
+        active_phases = {phase_idx}
+        if is_trans:
+            active_phases.add(next_idx)
+
         for k in range(len(phases)):
             x0, x1 = tl_starts[k], tl_ends[k]
-            alpha = 0.9 if k == phase_idx else 0.25
-            lw = 3 if k == phase_idx else 0
-            ec = 'white' if k == phase_idx else 'none'
+            is_active = k in active_phases
+            alpha_v = 0.9 if is_active else 0.25
+            lw = 3 if is_active else 0
+            ec = 'white' if is_active else 'none'
             rect = plt.Rectangle((x0, 0.3), x1-x0, 0.4,
-                                 facecolor=tl_colors[k], alpha=alpha,
+                                 facecolor=tl_colors[k], alpha=alpha_v,
                                  edgecolor=ec, linewidth=lw)
             ax_tl.add_patch(rect)
-            ax_tl.text((x0+x1)/2, 0.5, tl_labels[k], color='white' if k==phase_idx else DIM,
+            ax_tl.text((x0+x1)/2, 0.5, tl_labels[k], color='white' if is_active else DIM,
                        fontsize=8, ha='center', va='center', fontweight='bold',
                        family='monospace')
 
@@ -231,7 +268,7 @@ def generate_regime_phases():
         ax_tl.plot([global_frac], [0.15], marker='^', color='white',
                    markersize=8, transform=ax_tl.transAxes, clip_on=False)
 
-        frames.append(fig_to_img(fig, 1200, 700))
+        frames.append(fig_to_img(fig, 1400, 820))
         plt.close(fig)
 
     save_gif(frames, OUT_DIR / 'regime_phases_comparison.gif', duration=FRAME_MS)
