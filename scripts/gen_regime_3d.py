@@ -88,13 +88,10 @@ REGIMES = [
      "exec": "BUY 224 SPY @ $560.15", "cmap": CMAP_BULL, "z_boost": 1.5},
 ]
 
-GRID_N = 60          # resolution (was 40)
-FPR = 14             # frames per regime (stable)
-TPR = 10             # transition frames between regimes
-NUM_TRANSITIONS = len(REGIMES) - 1
-TOTAL = FPR * len(REGIMES) + TPR * NUM_TRANSITIONS
-FIG_DPI = 150        # (was 100)
-FIG_W, FIG_H = 10, 7.5  # (was 8, 6)
+GRID_N = 60          # resolution
+TOTAL = 150          # total frames (continuous, no static frames)
+FIG_DPI = 150
+FIG_W, FIG_H = 10, 7.5
 
 def smooth_interp(a, b, t):
     """Smooth-step interpolation (ease in/out)."""
@@ -102,111 +99,89 @@ def smooth_interp(a, b, t):
     s = t * t * (3 - 2 * t)  # smoothstep
     return a * (1 - s) + b * s
 
-# --- Build frame schedule: stable regimes + transition blends ---
-# Each entry: (regime_idx, blend_t, is_transition, next_regime_idx)
-#   blend_t in [0,1] for transitions (0=fully prev, 1=fully next)
-frame_schedule = []
-for ri in range(len(REGIMES)):
-    for sf in range(FPR):
-        frame_schedule.append((ri, 0.0, False, ri))
-    if ri < len(REGIMES) - 1:
-        for tf in range(TPR):
-            blend = (tf + 1) / (TPR + 1)  # 0 < blend < 1
-            frame_schedule.append((ri, blend, True, ri + 1))
-
 def blend_cmap(cmap_a, cmap_b, blend_t, z_norm):
     """Blend two colormaps pixel-by-pixel."""
     ca = cmap_a(z_norm)
     cb = cmap_b(z_norm)
     return ca * (1 - blend_t) + cb * blend_t
 
-def compute_surface(regime, fi_global):
-    """Compute Z surface for a given regime config."""
-    ri_idx = REGIMES.index(regime)
-    base = regime["base"]
-    vc = regime["vc"]
-    sc = regime["scale"]
-    z_boost = regime["z_boost"]
+# Keyframe positions along [0,1]: each regime is centered at these points.
+# We define transition midpoints between them.
+N_REG = len(REGIMES)
+# Each regime occupies a segment; the surface continuously morphs between them.
+# t in [0,1] maps across all regimes. At t=k/(N-1), we are fully in regime k.
 
+def get_regime_surface(ri, S, V, fi):
+    """Compute Z for a specific regime with its distortions."""
+    r = REGIMES[ri]
+    Z = iron_condor_pnl(S, V, r["base"], 20.0 / 365.0, 0.05) / r["scale"] * r["z_boost"]
+
+    if ri == 1:  # Transition: ripples
+        ripple = np.sin(S / 40 + fi * 0.35) * np.cos(V * 25 + fi * 0.25)
+        Z += ripple * 5.0
+    elif ri == 2:  # Crisis: turbulence + crater
+        turb = (np.sin(S / 30 + fi * 0.4) * np.cos(V * 30 + fi * 0.3)
+                + 0.5 * np.sin(S / 15 + fi * 0.6) * np.cos(V * 15 + fi * 0.45))
+        Z += turb * r["scale"] * 2.5
+        cx, cy = r["base"], r["vc"]
+        dist = ((S - cx) / (r["base"] * 0.15))**2 + ((V - cy) / 0.15)**2
+        Z -= 8.0 * np.exp(-dist * 0.5) * r["z_boost"]
+    elif ri == 3:  # Recovery: mild turbulence
+        turb = np.sin(S / 35 + fi * 0.25) * np.cos(V * 20 + fi * 0.15)
+        Z += turb * 1.0
+
+    return Z
+
+frames = []
+for fi in range(TOTAL):
+    # Continuous parameter t in [0, N_REG-1]
+    t = fi / (TOTAL - 1) * (N_REG - 1)
+    ri_a = min(int(t), N_REG - 2)       # left keyframe index
+    ri_b = ri_a + 1                       # right keyframe index
+    local_t = t - ri_a                    # 0..1 between the two keyframes
+    bt = smooth_interp(0, 1, local_t)     # smoothstep blend
+
+    curr = REGIMES[ri_a]
+    nxt = REGIMES[ri_b]
+
+    # Interpolate all parameters continuously
+    base = smooth_interp(curr["base"], nxt["base"], bt)
+    vc   = smooth_interp(curr["vc"],   nxt["vc"],   bt)
+    vix  = smooth_interp(curr["vix"],  nxt["vix"],  bt)
+    warn = smooth_interp(curr["warning"], nxt["warning"], bt)
+    crisis_p = smooth_interp(curr["crisis"], nxt["crisis"], bt)
+    elev = smooth_interp(curr["elev"], nxt["elev"], bt)
+    cash_pct = int(smooth_interp(curr["cash"], nxt["cash"], bt))
+    eq_pct = int(smooth_interp(curr["equity"], nxt["equity"], bt))
+    opt_pct = int(smooth_interp(curr["options"], nxt["options"], bt))
+
+    # Common grid centered on interpolated base/vc
     spot_range = np.linspace(base * 0.83, base * 1.17, GRID_N)
     vol_range = np.linspace(max(0.04, vc - 0.14), vc + 0.18, GRID_N)
     S, V = np.meshgrid(spot_range, vol_range)
 
-    Z = iron_condor_pnl(S, V, base, 20.0 / 365.0, 0.05) / sc * z_boost
+    # Compute both regime surfaces and blend
+    Z_a = get_regime_surface(ri_a, S, V, fi)
+    Z_b = get_regime_surface(ri_b, S, V, fi)
+    Z = Z_a * (1 - bt) + Z_b * bt
 
-    if ri_idx == 1:
-        ripple = np.sin(S / 40 + fi_global * 0.4) * np.cos(V * 25 + fi_global * 0.3)
-        Z += ripple * 5.0
-    elif ri_idx == 2:
-        turb = (np.sin(S / 30 + fi_global * 0.5) * np.cos(V * 30 + fi_global * 0.35)
-                + 0.5 * np.sin(S / 15 + fi_global * 0.7) * np.cos(V * 15 + fi_global * 0.5))
-        Z += turb * sc * 2.5
-        cx, cy = base, vc
-        dist = ((S - cx) / (base * 0.15))**2 + ((V - cy) / 0.15)**2
-        Z -= 8.0 * np.exp(-dist * 0.5) * z_boost
-    elif ri_idx == 3:
-        turb = np.sin(S / 35 + fi_global * 0.3) * np.cos(V * 20 + fi_global * 0.2)
-        Z += turb * 1.0
-
-    return S, V, Z
-
-frames = []
-for fi, (ri, blend_t, is_trans, nri) in enumerate(frame_schedule):
-    curr = REGIMES[ri]
-
-    if is_trans:
-        nxt = REGIMES[nri]
-        # Smooth-step the blend
-        bt = smooth_interp(0, 1, blend_t)
-
-        # Compute both surfaces on a common grid
-        base = smooth_interp(curr["base"], nxt["base"], bt)
-        vc   = smooth_interp(curr["vc"],   nxt["vc"],   bt)
-        spot_range = np.linspace(base * 0.83, base * 1.17, GRID_N)
-        vol_range = np.linspace(max(0.04, vc - 0.14), vc + 0.18, GRID_N)
-        S, V = np.meshgrid(spot_range, vol_range)
-
-        sc_a = curr["scale"]; sc_b = nxt["scale"]
-        sc = smooth_interp(sc_a, sc_b, bt)
-        zb_a = curr["z_boost"]; zb_b = nxt["z_boost"]
-        zb = smooth_interp(zb_a, zb_b, bt)
-        Z_a = iron_condor_pnl(S, V, curr["base"], 20.0/365.0, 0.05) / sc_a * zb_a
-        Z_b = iron_condor_pnl(S, V, nxt["base"], 20.0/365.0, 0.05) / sc_b * zb_b
-
-        # Add regime-specific distortions to each
-        if ri == 1:
-            ripple = np.sin(S/40 + fi*0.4) * np.cos(V*25 + fi*0.3)
-            Z_a += ripple * 5.0 * (1 - bt)
-        if ri == 2:
-            turb = (np.sin(S/30 + fi*0.5) * np.cos(V*30 + fi*0.35)
-                    + 0.5*np.sin(S/15 + fi*0.7) * np.cos(V*15 + fi*0.5))
-            Z_a += turb * sc_a * 2.5 * (1 - bt)
-        if nri == 2:
-            turb = (np.sin(S/30 + fi*0.5) * np.cos(V*30 + fi*0.35)
-                    + 0.5*np.sin(S/15 + fi*0.7) * np.cos(V*15 + fi*0.5))
-            Z_b += turb * sc_b * 2.5 * bt
-
-        Z = Z_a * (1 - bt) + Z_b * bt
-
-        vix  = smooth_interp(curr["vix"],  nxt["vix"],  bt)
-        warn = smooth_interp(curr["warning"], nxt["warning"], bt)
-        crisis_p = smooth_interp(curr["crisis"], nxt["crisis"], bt)
-        elev = smooth_interp(curr["elev"], nxt["elev"], bt)
-
-        # Title shows transition
-        tc = nxt["color"]
-        title_name = f'{curr["name"]} \u2192 {nxt["name"]}'
-        title_signal = f'TRANSITIONING ({bt*100:.0f}%)'
-    else:
-        S_c, V_c, Z = compute_surface(curr, fi)
-        S, V = S_c, V_c
-        vix = curr["vix"]
-        warn = curr["warning"]
-        crisis_p = curr["crisis"]
-        elev = curr["elev"]
+    # Determine display info
+    # Near a keyframe center -> show regime name; in between -> show transition
+    if bt < 0.15:
         tc = curr["color"]
         title_name = curr["name"]
         title_signal = curr["signal"]
+        exec_label = curr["exec"]
+    elif bt > 0.85:
+        tc = nxt["color"]
+        title_name = nxt["name"]
+        title_signal = nxt["signal"]
+        exec_label = nxt["exec"]
+    else:
+        tc = nxt["color"]
+        title_name = f'{curr["name"]} \u2192 {nxt["name"]}'
+        title_signal = f'TRANSITIONING ({bt*100:.0f}%)'
+        exec_label = f'{curr["exec"]} \u2192 {nxt["exec"]}'
 
     # --- Rendering ---
     fig = plt.figure(figsize=(FIG_W, FIG_H), dpi=FIG_DPI, facecolor='#080810')
@@ -217,11 +192,8 @@ for fi, (ri, blend_t, is_trans, nri) in enumerate(frame_schedule):
     z_range = z_max - z_min if z_max > z_min else 1.0
     z_norm = (Z - z_min) / z_range
 
-    # Colormap: blend between regime cmaps during transitions
-    if is_trans:
-        face_colors = blend_cmap(curr["cmap"], nxt["cmap"], bt, z_norm)
-    else:
-        face_colors = curr["cmap"](z_norm)
+    # Continuous colormap blend
+    face_colors = blend_cmap(curr["cmap"], nxt["cmap"], bt, z_norm)
 
     # Main surface
     ax.plot_surface(S, V * 100, Z, facecolors=face_colors, alpha=0.92,
@@ -236,16 +208,15 @@ for fi, (ri, blend_t, is_trans, nri) in enumerate(frame_schedule):
     z_floor = z_min - (z_range * 0.15)
     try:
         contour_levels = np.linspace(z_min, z_max, 8)
-        cmap_for_contour = curr["cmap"]
         ax.contour(S, V * 100, Z, levels=contour_levels, zdir='z', offset=z_floor,
-                   cmap=cmap_for_contour, alpha=0.35, linewidths=0.6)
+                   cmap=curr["cmap"], alpha=0.35, linewidths=0.6)
     except Exception:
         pass
 
     ax.set_zlim(z_floor, z_max + z_range * 0.1)
 
     # Camera
-    azim = 215 + fi * 1.8
+    azim = 215 + fi * 1.5
     ax.view_init(elev=elev, azim=azim)
 
     # Axis styling
@@ -267,10 +238,6 @@ for fi, (ri, blend_t, is_trans, nri) in enumerate(frame_schedule):
         color=tc, fontsize=14, fontweight='bold', y=0.96, fontfamily='monospace')
 
     # --- Info bar ---
-    exec_label = curr["exec"] if not is_trans else f'{curr["exec"]} -> {nxt["exec"]}'
-    cash_pct = int(smooth_interp(curr["cash"], nxt["cash"], blend_t)) if is_trans else curr["cash"]
-    eq_pct = int(smooth_interp(curr["equity"], nxt["equity"], blend_t)) if is_trans else curr["equity"]
-    opt_pct = int(smooth_interp(curr["options"], nxt["options"], blend_t)) if is_trans else curr["options"]
     fig.text(0.03, 0.025,
              f'[Execution] {exec_label}   |   '
              f'Cash: {cash_pct}%  Equity: {eq_pct}%  Options: {opt_pct}%   |   '
@@ -286,31 +253,25 @@ for fi, (ri, blend_t, is_trans, nri) in enumerate(frame_schedule):
                                       linewidth=0.8, zorder=1))
     regime_colors_bar = ['#00ff88', '#ffaa00', '#ff3344', '#00aaff', '#00ff88']
     regime_labels = ['Bull', 'Trans', 'Crisis', 'Recov', 'Bull+']
-    seg_w = 0.92 / 5
-    progress = ri + (blend_t if is_trans else 0)
-    for k in range(5):
+    seg_w = 0.92 / N_REG
+    progress_frac = t / (N_REG - 1)  # 0..1 across total bar
+    for k in range(N_REG):
         x0 = 0.04 + k * seg_w
-        if k < ri or (k == ri and not is_trans):
-            w = seg_w
-            alpha_val = 0.95
-        elif k == ri and is_trans:
-            w = seg_w
-            alpha_val = 0.95
-        else:
-            w = seg_w
-            alpha_val = 0.15
-        fig.patches.append(plt.Rectangle((x0, bar_y), w, bar_h,
+        fill_frac = min(1.0, max(0.0, (progress_frac * N_REG - k)))
+        alpha_val = 0.25 + 0.70 * fill_frac
+        fig.patches.append(plt.Rectangle((x0, bar_y), seg_w, bar_h,
                                           transform=fig.transFigure,
                                           facecolor=regime_colors_bar[k],
                                           alpha=alpha_val, zorder=2))
-        lbl_alpha = 1.0 if k == ri or (is_trans and k == nri) else 0.4
+        is_active = (k == ri_a) or (k == ri_b and bt > 0.15)
+        lbl_alpha = 1.0 if is_active else 0.4
         fig.text(x0 + seg_w / 2, bar_y + bar_h + 0.006, regime_labels[k],
                  color=regime_colors_bar[k], fontsize=7, ha='center',
-                 fontweight='bold' if (k == ri or (is_trans and k == nri)) else 'normal',
+                 fontweight='bold' if is_active else 'normal',
                  alpha=lbl_alpha, fontfamily='monospace')
 
     # Active marker
-    marker_x = 0.04 + progress * seg_w
+    marker_x = 0.04 + progress_frac * 0.92
     fig.text(marker_x, bar_y - 0.012, '\u25b2', color='white', fontsize=8,
              ha='center', fontfamily='monospace')
 
