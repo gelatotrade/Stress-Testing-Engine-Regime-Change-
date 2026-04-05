@@ -14,30 +14,21 @@ The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Vola
 
 ### P&L Surface Morphing Through Live Regime Detection
 
-> The animation is **fully continuous** — there are no static frames or abrupt jumps. Every single frame smoothly interpolates both the surface shape and the colormap between the two nearest regime keyframes using smoothstep (ease-in/out) blending. The regimes flow: **BULL QUIET** (blue valleys → green peaks) --> **TRANSITION** (purple → amber) --> **BEAR VOLATILE / CRISIS** (deep-blue → red → gold) --> **RECOVERY** (purple → cyan → mint) --> **NEW BULL**. 120-150 frames total at 120ms each for buttery-smooth playback. Diverging colormaps ensure peaks and valleys always have clearly different hues. Wireframe overlay adds depth perception. Contour lines project onto the floor. Camera elevation continuously shifts (lower during crisis). The execution engine trades are shown in real-time.
+> The animation is **fully continuous** — every frame smoothly interpolates the surface shape, colormap, and camera between regimes using smoothstep blending. 120-150 frames at 120ms each. Diverging colormaps ensure peaks and valleys always have clearly different hues. Wireframe overlay adds depth perception. Contour lines project onto the floor. Camera elevation continuously shifts (lower during crisis).
 
 ![3D P&L Surface - Live Regime Cycle](docs/img/regime_cycle_3d.gif)
 
-**What you're seeing:**
-- **X-Axis**: Spot Price ($) -- the underlying S&P 500 level from live feed
-- **Y-Axis**: Implied Volatility (%) -- option-implied expected volatility (VIX)
-- **Z-Axis**: P&L ($) -- portfolio profit/loss from Iron Condor strategy
-- **Color**: Diverging colormaps per regime -- valleys and peaks have distinctly different hues (e.g. bull: blue valleys → green peaks → yellow tops; crisis: deep-blue valleys → purple → red peaks → gold tops)
-- **Smooth transitions**: Fully continuous — every frame interpolates surface + colormap + camera via smoothstep, no static or abrupt frames
-- **Wireframe**: White semi-transparent wireframe overlay every 4th grid line for depth perception
-- **Floor contours**: 8-level contour projection on the Z-floor showing P&L topology
-- **Camera**: Variable elevation (30° bull, 20° crisis) with continuous azimuth rotation
-- **Header**: LIVE indicator, current regime, execution engine trades, VIX level
+**The 5 market regimes and how they look in 3D:**
 
-| Phase | Surface Shape | Colormap (valleys → peaks) | Camera | VIX | Signal | Execution Action | Cash |
-|-------|--------------|---------------------------|--------|-----|--------|-----------------|------|
-| Bull Quiet | Smooth elevated dome (+28 P&L peak) | Blue → Green → Yellow | 30° elev | ~12 | STRONG BUY | BUY 892 SPY | 15% |
-| Transition | Rippling surface with 6x sine·cos waves | Purple → Amber → Cream | 26° elev | ~24 | REDUCE RISK | SELL 446 SPY | 40% |
-| Bear Volatile | Inverted crater (-22 base, -10 Gaussian dip) | Deep-blue → Purple → Red → Gold | 20° elev | ~67 | CRISIS | SELL 357 SPY | 70% |
-| Recovery | Reforming upward slope (+16 peak) | Purple → Blue → Cyan → Mint | 28° elev | ~28 | BUY | BUY 663 SPY | 25% |
-| New Bull | Smooth dome returns (+26 peak) | Blue → Green → Yellow | 30° elev | ~14 | STRONG BUY | BUY 224 SPY | 15% |
+| Regime | Surface Shape | Colormap (valleys → peaks) | Camera | VIX | Signal | Execution Action |
+|--------|--------------|---------------------------|--------|-----|--------|-----------------|
+| **BULL QUIET** | Smooth elevated dome (+28 P&L peak) | Blue → Green → Yellow | 30° elev | ~12 | STRONG BUY | BUY 892 SPY |
+| **TRANSITION** | Rippling surface with sine·cos waves | Purple → Amber → Cream | 26° elev | ~24 | REDUCE RISK | SELL 446 SPY |
+| **BEAR VOLATILE** | Inverted crater (-22 base, Gaussian dip) | Deep-blue → Purple → Red → Gold | 20° elev | ~67 | CRISIS | SELL 357 SPY |
+| **RECOVERY** | Reforming upward slope (+16 peak) | Purple → Blue → Cyan → Mint | 28° elev | ~28 | BUY | BUY 663 SPY |
+| **NEW BULL** | Smooth dome returns (+26 peak) | Blue → Green → Yellow | 30° elev | ~14 | STRONG BUY | BUY 224 SPY |
 
-> All transitions between rows are **continuous** — the surface, colormap, and camera blend smoothly via smoothstep interpolation across ~30 frames per transition.
+> All transitions are **continuous** — the surface, colormap, and camera blend smoothly via smoothstep interpolation across ~30 frames per transition.
 
 ---
 
@@ -86,26 +77,27 @@ The Hidden Markov Model's **5x5 transition probability matrix** shows the likeli
 
 ## How the 3D Coordinate System Changes Per Regime
 
-Watch the 3D P&L surface **morph continuously** as the engine cycles through all 5 market regimes. The animation is **fully smooth** — every frame interpolates between the two nearest regimes via smoothstep blending (surface geometry, colormap, camera elevation all blend simultaneously). 120 frames at 120ms = ~14 seconds of fluid animation. 55-point grid, 150 DPI. Diverging colormaps make peaks and valleys instantly distinguishable.
+Watch the 3D P&L surface **morph continuously** through all 5 market regimes. Every frame interpolates surface geometry, colormap, and camera elevation simultaneously via smoothstep blending. 120 frames at 120ms = ~14 seconds of fluid animation. 55-point grid, 150 DPI.
 
 ![3D Regime Phase Comparison Animation](docs/img/regime_phases_comparison.gif)
 
-**What you see as the animation flows:**
-- **Bull Quiet**: Smooth dome (blue valleys → green peaks → yellow tops, 30° camera) -- `BUY 892 SPY @ $528.04`
-- **→ smooth morph →** surface ripples grow, colormap fades from green to amber, camera lowers
-- **Transition**: Rippling surface (purple → amber → cream, 26° camera) -- `SELL 446 SPY @ $505.12`
-- **→ smooth morph →** surface inverts into crater, colormap shifts to red, camera drops to 20°
-- **Bear Volatile**: Deep crater (deep-blue → purple → red → gold, 20° camera) -- `SELL 357 SPY @ $391.88`
-- **→ smooth morph →** crater fills, colormap shifts to blue/cyan, camera rises
-- **Recovery**: Reforming upward (purple → blue → cyan → mint, 28° camera) -- `BUY 663 SPY @ $450.22`
-- **→ smooth morph →** dome reforms, colormap returns to green, camera rises to 30°
-- **New Bull**: Smooth dome (blue → green → yellow, 30° camera) -- `BUY 224 SPY @ $560.15`
+**Regime progression (each regime has a distinct visual signature):**
+
+| Regime | What You See | Colormap | Camera | Execution |
+|--------|-------------|----------|--------|-----------|
+| **BULL QUIET** | Smooth elevated dome | Blue valleys → Green peaks → Yellow tops | 30° | `BUY 892 SPY @ $528.04` |
+| **TRANSITION** | Surface ripples grow, turbulence appears | Purple → Amber → Cream | 26° | `SELL 446 SPY @ $505.12` |
+| **BEAR VOLATILE** | Deep inverted crater, maximum turbulence | Deep-blue → Purple → Red → Gold | 20° | `SELL 357 SPY @ $391.88` |
+| **RECOVERY** | Crater fills, upward slope reforms | Purple → Blue → Cyan → Mint | 28° | `BUY 663 SPY @ $450.22` |
+| **NEW BULL** | Smooth dome returns | Blue → Green → Yellow | 30° | `BUY 224 SPY @ $560.15` |
+
+> Between each row the surface, colormap, and camera morph continuously — no abrupt jumps.
 
 ---
 
 ### Combined Dashboard: Real S&P 500 Data + 3D Regime Surface
 
-The **side-by-side dashboard** uses **real S&P 500 market data** from yfinance with **actual dates on the x-axis**. The performance chart (left) and 3D regime surface (right) are **synchronized in real-time**. Available for 3 timeframes: **Daily (~3 years)**, **Hourly (~60 days)**, and **Minute (~5 days)**. The 3D surface is rendered on an **80x80 high-resolution grid** with a deep-blue → white → red diverging colormap derived from actual return statistics (mean, volatility, skewness, kurtosis). As the chart progresses through regime changes, the 3D surface morphs in sync — you can see the surface shift from a smooth blue dome to a deep red crater exactly as the drawdown hits the chart. 120 frames each, fully continuous smooth transitions.
+The **side-by-side dashboard** uses **real S&P 500 market data** from yfinance with **actual dates on the x-axis**. The performance chart (left) and 3D regime surface (right) are **synchronized in real-time**. Available for 3 timeframes: **Daily (~3 years)**, **Hourly (~60 days)**, and **Minute (~5 days)**. The 3D surface is rendered on an **80x80 high-resolution grid** with a deep-blue → white → red diverging colormap derived from actual return statistics. Hourly and minute data are **gap-filtered** to remove overnight/weekend dead space — only active trading hours are shown. 120 frames at 220ms each (~26 seconds per loop) for easy observation of regime transitions.
 
 #### Daily (~3 Years of Real S&P 500 Data)
 
@@ -120,20 +112,19 @@ The **side-by-side dashboard** uses **real S&P 500 market data** from yfinance w
 ![Combined Dashboard Minute](docs/img/combined_dashboard_minute.gif)
 
 **Left panel (Real S&P 500 Data):**
-- **Green line**: Strategy portfolio cumulative return (adaptive exposure: 15% crisis → 110% bull)
-- **Red line**: S&P 500 benchmark cumulative return (buy-and-hold)
-- **X-axis**: Real calendar dates from yfinance (e.g., "Apr 2023", "Jan 07 14:30", "Mar 28 09:35")
-- **Colored bands**: Regime periods detected from actual market returns (green/yellow/red/cyan)
-- **Trade markers**: Execution engine buy/sell actions with arrows
+- **White line**: Strategy portfolio cumulative return (adaptive exposure: 15% in BEAR VOLATILE → 110% in BULL QUIET)
+- **Blue line**: S&P 500 benchmark cumulative return (buy-and-hold)
+- **X-axis**: Real calendar dates from yfinance (gap-filtered for hourly/minute data)
+- **Green/red fill**: Alpha areas where strategy outperforms/underperforms benchmark
 - **White dotted line**: Current bar cursor
 - **Lower chart**: Drawdown comparison — strategy vs. S&P 500
 
 **Right panel (80x80 High-Resolution 3D Surface):**
-- **3D P&L surface** morphing in sync with the chart timeline, shaped by real return statistics
-- **Deep-blue → white → red diverging colormap** — blue for valleys/losses, white for neutral, red for peaks/gains
-- **Surface derived from actual data**: mean return sets height, volatility sets roughness, skewness tilts the surface, kurtosis sharpens peaks
+- **3D surface** morphing in sync with the chart timeline, shaped by real return statistics
+- **Deep-blue → white → red diverging colormap** — matching the regime table above
+- **Title shows**: Current regime (BULL QUIET / TRANSITION / BEAR VOLATILE / RECOVERY) + annualized volatility
 - **Wireframe + contour floor** for depth perception
-- **Camera** elevation shifts per regime (30° bull → 20° crisis → 30° recovery)
+- **Camera** elevation shifts per regime (30° BULL QUIET → 20° BEAR VOLATILE → 30° RECOVERY)
 
 **Real data sources (yfinance):**
 | Timeframe | Ticker | Period | Interval | Typical Bars | Date Format |
@@ -142,7 +133,7 @@ The **side-by-side dashboard** uses **real S&P 500 market data** from yfinance w
 | Hourly | ^GSPC | 60 days | 1h | ~411 | `%b %d %H:%M` (e.g., "Jan 07 14:30") |
 | Minute | ^GSPC | 5 days | 1m | ~1948 | `%b %d %H:%M` (e.g., "Mar 28 09:35") |
 
-**How they connect:** The regime is computed from a rolling window of actual S&P 500 returns — when real market returns turn negative with high volatility, the regime shifts to Bear Volatile and the 3D surface simultaneously inverts into a deep red crater. When returns recover, the surface reforms into an upward blue dome. The strategy's adaptive exposure (reducing to 15% in crisis, scaling to 110% in bull) generates alpha shown as the green line above the red benchmark.
+**How they connect:** The regime is computed from a rolling window of actual S&P 500 returns — when real market returns turn negative with high volatility, the regime shifts to **BEAR VOLATILE** and the 3D surface simultaneously inverts into a deep red crater. When returns recover (**RECOVERY**), the surface reforms into an upward blue dome. The strategy's adaptive exposure (15% in BEAR VOLATILE, 110% in BULL QUIET) generates alpha shown as the white line above the blue benchmark.
 
 ---
 
@@ -435,13 +426,13 @@ python3 scripts/gen_combined_dashboard.py        # 3 GIFs: combined_dashboard_{d
 
 ## Regime-Strategy Mapping
 
-| Regime | Surface Shape | Recommended Strategies | Cash Target | Execution Action |
-|--------|---------------|----------------------|-------------|-----------------|
-| Bull Quiet | Smooth green dome | Covered Call, Iron Condor, Bull Call Spread | 15% | BUY equity, collect premium |
-| Bull Volatile | Steep green peaks | Collar, Straddle, Covered Call | 25% | Reduce size, add hedges |
-| Bear Quiet | Flat yellow surface | Bear Put Spread, Collar, Protective Put | 40% | SELL equity incrementally |
-| Bear Volatile | **Inverted red crater** | **Protective Put, Collar (CRISIS)** | **60-70%** | **SELL to cash, full hedge** |
-| Transition | Rippled mixed surface | Straddle, Strangle, Collar | 35% | Hold, tighten stops |
+| Regime | 3D Surface | Recommended Strategies | Exposure | Execution Action |
+|--------|-----------|----------------------|----------|-----------------|
+| **BULL QUIET** | Smooth elevated dome (blue → green) | Covered Call, Iron Condor, Bull Call Spread | 110% | BUY equity, collect premium |
+| **BULL VOLATILE** | Steep peaks with ripples | Collar, Straddle, Covered Call | 80% | Reduce size, add hedges |
+| **TRANSITION** | Rippled surface (purple → amber) | Straddle, Strangle, Collar | 40% | Hold, tighten stops |
+| **BEAR VOLATILE** | **Inverted crater (deep-blue → red → gold)** | **Protective Put, Collar (CRISIS)** | **15%** | **SELL to cash, full hedge** |
+| **RECOVERY** | Reforming upward slope (purple → cyan) | Bull Call Spread, Covered Call | 80% | BUY equity incrementally |
 
 ---
 
