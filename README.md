@@ -1,6 +1,6 @@
 # Stress Testing Engine with Regime Change Detection
 
-A high-performance C++ engine for **live** and **backtest** stress testing of options portfolio strategies. Features high-quality real-time 3D visualization (150 DPI, 60-point grid, **diverging colormaps** where peaks and valleys have distinctly different hues, **fully continuous smooth interpolation** between regimes with no abrupt jumps — every frame smoothly blends surface shape + colormap + camera, wireframe overlays, contour floor projections), Hidden Markov Model regime detection, an execution engine for automated trading, and early warning signals for optimal risk allocation vs. S&P 500 benchmark.
+A high-performance C++ engine for **live** and **backtest** stress testing of options portfolio strategies. Features high-quality real-time 3D visualization using **real S&P 500 market data** from yfinance (150 DPI, **80-point grid**, **diverging colormaps** where peaks and valleys have distinctly different hues, **fully continuous smooth interpolation** between regimes with no abrupt jumps — every frame smoothly blends surface shape + colormap + camera, wireframe overlays, contour floor projections), Hidden Markov Model regime detection, an execution engine for automated trading, and early warning signals for optimal risk allocation vs. S&P 500 benchmark.
 
 **The engine runs in two modes:**
 - **Live Mode** (`--live`): Connects to real-time market data, detects regime changes as they happen, and automatically executes trades through the execution engine to outperform the S&P 500
@@ -10,7 +10,7 @@ A high-performance C++ engine for **live** and **backtest** stress testing of op
 
 ## Live 3D Regime Change Visualization (High Quality)
 
-The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Volatility x P&L) that **morphs in real-time** as market regimes shift. All 3D visualizations render at **150 DPI** on a **55-60 point grid** with **per-regime colormaps**, **wireframe depth overlays**, and **contour floor projections** for maximum clarity of regime transitions. In live mode, the surface updates tick-by-tick from the live data feed while the execution engine automatically rebalances positions.
+The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Volatility x P&L) that **morphs in real-time** as market regimes shift. All 3D visualizations render at **150 DPI** on a **55-80 point grid** with **per-regime colormaps**, **wireframe depth overlays**, and **contour floor projections** for maximum clarity of regime transitions. The combined dashboards use **real S&P 500 data** fetched via yfinance with **real dates on the x-axis**. In live mode, the surface updates tick-by-tick from the live data feed while the execution engine automatically rebalances positions.
 
 ### P&L Surface Morphing Through Live Regime Detection
 
@@ -103,44 +103,46 @@ Watch the 3D P&L surface **morph continuously** as the engine cycles through all
 
 ---
 
-### Combined Dashboard: Strategy vs. S&P 500 + 3D Regime Surface
+### Combined Dashboard: Real S&P 500 Data + 3D Regime Surface
 
-The **side-by-side dashboard** shows the performance chart (left) and 3D regime surface (right) **synchronized in real-time**. Available for 3 timeframes: **Daily**, **Hourly (1H)**, and **Minute (1M)**. As the chart progresses through regime changes, the 3D surface morphs in sync — you can see the surface shift from a smooth green dome to a red crater exactly as the drawdown hits the chart. 120 frames each, fully continuous smooth transitions.
+The **side-by-side dashboard** uses **real S&P 500 market data** from yfinance with **actual dates on the x-axis**. The performance chart (left) and 3D regime surface (right) are **synchronized in real-time**. Available for 3 timeframes: **Daily (~3 years)**, **Hourly (~60 days)**, and **Minute (~5 days)**. The 3D surface is rendered on an **80x80 high-resolution grid** with a deep-blue → white → red diverging colormap derived from actual return statistics (mean, volatility, skewness, kurtosis). As the chart progresses through regime changes, the 3D surface morphs in sync — you can see the surface shift from a smooth blue dome to a deep red crater exactly as the drawdown hits the chart. 120 frames each, fully continuous smooth transitions.
 
-#### Daily (756 Trading Days / ~3 Years)
+#### Daily (~3 Years of Real S&P 500 Data)
 
 ![Combined Dashboard Daily](docs/img/combined_dashboard_daily.gif)
 
-#### Hourly (1,680 Hours / ~4 Months)
+#### Hourly (~60 Days of Real S&P 500 Data)
 
 ![Combined Dashboard Hourly](docs/img/combined_dashboard_hourly.gif)
 
-#### Minute (2,340 Minutes / ~6 Trading Days)
+#### Minute (~5 Days of Real S&P 500 Data)
 
 ![Combined Dashboard Minute](docs/img/combined_dashboard_minute.gif)
 
-**Left panel:**
-- **Green line**: Strategy portfolio cumulative return
-- **Red line**: S&P 500 benchmark cumulative return
-- **Colored bands**: Regime periods (green/yellow/red/cyan)
+**Left panel (Real S&P 500 Data):**
+- **Green line**: Strategy portfolio cumulative return (adaptive exposure: 15% crisis → 110% bull)
+- **Red line**: S&P 500 benchmark cumulative return (buy-and-hold)
+- **X-axis**: Real calendar dates from yfinance (e.g., "Apr 2023", "Jan 07 14:30", "Mar 28 09:35")
+- **Colored bands**: Regime periods detected from actual market returns (green/yellow/red/cyan)
 - **Trade markers**: Execution engine buy/sell actions with arrows
 - **White dotted line**: Current bar cursor
 - **Lower chart**: Drawdown comparison — strategy vs. S&P 500
 
-**Right panel:**
-- **3D P&L surface** morphing in sync with the chart timeline
-- **Diverging colormap** blending between regimes (blue valleys, green/red/gold peaks)
+**Right panel (80x80 High-Resolution 3D Surface):**
+- **3D P&L surface** morphing in sync with the chart timeline, shaped by real return statistics
+- **Deep-blue → white → red diverging colormap** — blue for valleys/losses, white for neutral, red for peaks/gains
+- **Surface derived from actual data**: mean return sets height, volatility sets roughness, skewness tilts the surface, kurtosis sharpens peaks
 - **Wireframe + contour floor** for depth perception
 - **Camera** elevation shifts per regime (30° bull → 20° crisis → 30° recovery)
 
-**Timeframe differences:**
-| Timeframe | Bars | Period | Drift/Vol scaling | Use case |
-|-----------|------|--------|-------------------|----------|
-| Daily | 756 | ~3 years | Base | Long-term strategy validation |
-| Hourly (1H) | 1,680 | ~4 months | daily / √6.5 | Intraday regime detection |
-| Minute (1M) | 2,340 | ~6 days | daily / √390 | High-frequency live monitoring |
+**Real data sources (yfinance):**
+| Timeframe | Ticker | Period | Interval | Typical Bars | Date Format |
+|-----------|--------|--------|----------|-------------|-------------|
+| Daily | ^GSPC | 3 years | 1d | ~753 | `%b %Y` (e.g., "Apr 2023") |
+| Hourly | ^GSPC | 60 days | 1h | ~411 | `%b %d %H:%M` (e.g., "Jan 07 14:30") |
+| Minute | ^GSPC | 5 days | 1m | ~1948 | `%b %d %H:%M` (e.g., "Mar 28 09:35") |
 
-**How they connect:** When the chart enters the Bear Volatile regime, the 3D surface simultaneously inverts into a deep red crater. When the strategy re-enters at the Recovery, the surface reforms into an upward slope. The alpha (green above red) on the chart maps directly to the surface height difference.
+**How they connect:** The regime is computed from a rolling window of actual S&P 500 returns — when real market returns turn negative with high volatility, the regime shifts to Bear Volatile and the 3D surface simultaneously inverts into a deep red crater. When returns recover, the surface reforms into an upward blue dome. The strategy's adaptive exposure (reducing to 15% in crisis, scaling to 110% in bull) generates alpha shown as the green line above the red benchmark.
 
 ---
 
@@ -223,7 +225,7 @@ The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmar
 
 ### 3D Live Visualization Dashboard (High Quality)
 - **Real-time 3D P&L surface** (Spot x Volatility x P&L) using Three.js/WebGL
-- **150 DPI rendering** with 55-60 point grids for smooth surfaces
+- **150 DPI rendering** with 55-80 point grids for smooth surfaces (combined dashboards use 80x80)
 - **Diverging colormaps**: valleys and peaks have distinctly different hues per regime (not just light/dark)
 - **Fully continuous transitions**: every frame smoothly interpolates surface + colormap + camera via smoothstep, no abrupt jumps
 - **Wireframe overlay**: semi-transparent white wireframe every 4th grid line for depth
@@ -351,7 +353,7 @@ Supported integration patterns:
 - CMake 3.16+
 - POSIX threads
 - `curl` (for Yahoo Finance live data feed)
-- Python 3.8+ with matplotlib, numpy, Pillow (for visualization generation only)
+- Python 3.8+ with matplotlib, numpy, Pillow, yfinance (for visualization generation only)
 
 ### Build
 ```bash
@@ -397,11 +399,11 @@ make -j$(nproc)
 ### Regenerate Visualization GIFs (High Quality)
 All scripts render at 150 DPI with high-resolution grids (55-60 pts), diverging colormaps, fully continuous smoothstep transitions (120-150 frames, no abrupt jumps), wireframe overlays, and contour projections.
 ```bash
-pip install matplotlib numpy Pillow
+pip install matplotlib numpy Pillow yfinance
 python3 scripts/generate_visualizations.py      # 4 GIFs: regime_cycle_3d, early_warning, stress_test, transition_heatmap
 python3 scripts/gen_regime_3d.py                 # 1 GIF: regime_cycle_3d (Black-Scholes based, 90 frames)
 python3 scripts/generate_extra_visualizations.py # 2 GIFs: regime_phases_comparison, performance_vs_sp500
-python3 scripts/gen_combined_dashboard.py        # 3 GIFs: combined_dashboard_{daily,hourly,minute}
+python3 scripts/gen_combined_dashboard.py        # 3 GIFs: combined_dashboard_{daily,hourly,minute} (real S&P 500 data via yfinance, 80x80 grid)
 ```
 
 ### CLI Options
