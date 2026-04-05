@@ -120,11 +120,11 @@ The **side-by-side dashboard** uses **real S&P 500 market data** from yfinance w
 - **Lower chart**: Drawdown comparison — strategy vs. S&P 500
 
 **Right panel (80x80 High-Resolution 3D Surface):**
-- **3D surface** morphing in sync with the chart timeline, shaped by real return statistics
-- **Deep-blue → white → red diverging colormap** — matching the regime table above
-- **Title shows**: Current regime (BULL QUIET / TRANSITION / BEAR VOLATILE / RECOVERY) + annualized volatility
-- **Wireframe + contour floor** for depth perception
-- **Camera** elevation shifts per regime (30° BULL QUIET → 20° BEAR VOLATILE → 30° RECOVERY)
+- **Same 3D surface shapes** as all other visualizations — smooth dome (BULL QUIET), rippling waves (TRANSITION), inverted crater (BEAR VOLATILE), reforming slope (RECOVERY)
+- **Same per-regime diverging colormaps** — blue→green→yellow (bull), purple→amber (transition), deep-blue→red→gold (crisis), purple→cyan→mint (recovery)
+- **Same wireframe + contour floor** for depth perception
+- **Same camera** elevations (30° BULL QUIET → 26° TRANSITION → 20° BEAR VOLATILE → 28° RECOVERY)
+- **Smoothstep blending** between regimes — surface shape, colormap, and camera all morph continuously
 
 **Real data sources (yfinance):**
 | Timeframe | Ticker | Period | Interval | Typical Bars | Date Format |
@@ -133,7 +133,7 @@ The **side-by-side dashboard** uses **real S&P 500 market data** from yfinance w
 | Hourly | ^GSPC | 60 days | 1h | ~411 | `%b %d %H:%M` (e.g., "Jan 07 14:30") |
 | Minute | ^GSPC | 5 days | 1m | ~1948 | `%b %d %H:%M` (e.g., "Mar 28 09:35") |
 
-**How they connect:** The regime is computed from a rolling window of actual S&P 500 returns — when real market returns turn negative with high volatility, the regime shifts to **BEAR VOLATILE** and the 3D surface simultaneously inverts into a deep red crater. When returns recover (**RECOVERY**), the surface reforms into an upward blue dome. The strategy's adaptive exposure (15% in BEAR VOLATILE, 110% in BULL QUIET) generates alpha shown as the white line above the blue benchmark.
+**How they connect:** The regime is computed from a rolling window of actual S&P 500 returns. The 3D surface uses the **same shapes and colormaps** as the first two visualizations — when real market returns turn negative with high volatility, the regime shifts to **BEAR VOLATILE** and the surface inverts into the same deep-blue → red → gold crater you see in the regime cycle animations above. When returns recover, the surface morphs into the same purple → cyan → mint upward slope. The strategy's adaptive exposure (15% in BEAR VOLATILE, 110% in BULL QUIET) generates alpha shown as the white line above the blue benchmark.
 
 ---
 
