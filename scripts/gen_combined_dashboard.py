@@ -70,8 +70,8 @@ space_x, space_y = np.meshgrid(spot, spot)
 def surface_from_returns(returns_window, fi):
     """
     Build a 3D surface from a window of real returns.
-    Inspired by the reference images: the surface shape encodes
-    market dynamics (drift β, acceleration α, volatility τ, gradient ∇τ).
+    The surface shape encodes market dynamics derived from
+    return statistics (mean, volatility, skewness, kurtosis).
     """
     if len(returns_window) < 10:
         returns_window = np.zeros(50)
@@ -121,21 +121,20 @@ def surface_from_returns(returns_window, fi):
 def compute_regime(returns_window):
     """Simple regime classification from returns."""
     if len(returns_window) < 5:
-        return 'Bull Quiet', GREEN
+        return 'BULL QUIET', GREEN
     mu = np.mean(returns_window)
     sigma = np.std(returns_window)
-    neg_frac = np.mean(returns_window < 0)
 
     if sigma > 0.018 and mu < -0.001:
-        return 'Bear Volatile', RED
+        return 'BEAR VOLATILE', RED
     elif sigma > 0.012 and mu < 0:
-        return 'Transition', YELLOW
+        return 'TRANSITION', YELLOW
     elif mu > 0.0005 and sigma < 0.01:
-        return 'Bull Quiet', GREEN
+        return 'BULL QUIET', GREEN
     elif mu > 0:
-        return 'Recovery', CYAN
+        return 'RECOVERY', CYAN
     else:
-        return 'Transition', YELLOW
+        return 'TRANSITION', YELLOW
 
 
 # ---------------------------------------------------------------------------
@@ -161,9 +160,47 @@ def save_gif(frames, path, duration=120):
     print(f'  Saved {path}  ({len(rgb)} frames, {path.stat().st_size / 1024:.0f} KB)')
 
 
+def filter_market_gaps(prices, dates, tf_key):
+    """Remove overnight/weekend gaps for hourly and minute data.
+
+    Gaps appear as large time jumps between consecutive bars when the market
+    is closed. We detect these and create a continuous index so the chart
+    shows only trading hours without dead space.
+    """
+    if tf_key == 'daily':
+        return prices, dates  # daily data has no intraday gaps
+
+    from datetime import timedelta
+    max_gap = timedelta(hours=2) if tf_key == 'hourly' else timedelta(minutes=5)
+
+    mask = [True]  # always keep first bar
+    for i in range(1, len(dates)):
+        gap = dates[i] - dates[i - 1]
+        if gap <= max_gap:
+            mask.append(True)
+        else:
+            mask.append(True)  # keep the bar but we'll re-index
+
+    # Re-index dates to be continuous (no gaps)
+    continuous_dates = [dates[0]]
+    step = timedelta(hours=1) if tf_key == 'hourly' else timedelta(minutes=1)
+    for i in range(1, len(dates)):
+        gap = dates[i] - dates[i - 1]
+        if gap > max_gap:
+            # Skip the gap, continue from last continuous date
+            continuous_dates.append(continuous_dates[-1] + step)
+        else:
+            continuous_dates.append(continuous_dates[-1] + (gap))
+
+    return prices, np.array(continuous_dates)
+
+
 def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label):
     """Generate a combined dashboard GIF from real price data."""
     print(f'\nGenerating combined_dashboard_{tf_key}.gif  ({timeframe_label}) ...')
+
+    # Filter out market-closed gaps for intraday data
+    prices, dates = filter_market_gaps(prices, dates, tf_key)
     N = len(prices)
 
     # Compute returns
@@ -224,11 +261,11 @@ def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label
         alpha_pct = port_cum[d] - sp_cum[d]
 
         ax_title.text(0.5, 0.7,
-                      r'$Z(x,y) = F(\beta, \alpha, \tau, \nabla\tau;\; x, y, t)$'
-                      f'    |    Regime: {regime_name}',
+                      f'\u25cf LIVE  |  Regime: {regime_name}  |  '
+                      f'Exposure: {exposure[d]*100:.0f}%',
                       color=regime_color, fontsize=16, fontweight='bold',
                       ha='center', va='center', transform=ax_title.transAxes,
-                      family='serif')
+                      family='monospace')
         ax_title.text(0.5, 0.15,
                       f'\u25cf LIVE  {timeframe_label}  |  '
                       f'{cur_date}  |  S&P 500: ${cur_price:,.0f}  |  '
@@ -357,11 +394,9 @@ def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label
 
         # Title with regime + formulas
         vol_pct = vol * 100 * np.sqrt(252 if tf_key == 'daily' else (252*6.5 if tf_key == 'hourly' else 252*390))
-        beta = np.mean(ret_window) / (vol + 1e-10)
         ax3d.set_title(
             f'Regime: {regime_name}\n'
-            r'$\beta$' + f'={beta:.2f}  '
-            r'$\sigma$' + f'={vol_pct:.1f}%',
+            f'Ann. Vol: {vol_pct:.1f}%',
             color=regime_color, fontsize=10, fontweight='bold',
             fontfamily='monospace', pad=6)
 
@@ -370,7 +405,7 @@ def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label
         if (fi + 1) % 20 == 0 or fi == 0:
             print(f'  [{tf_key}] Frame {fi + 1}/{TOTAL_FRAMES}')
 
-    save_gif(frames, OUT_DIR / f'combined_dashboard_{tf_key}.gif', duration=120)
+    save_gif(frames, OUT_DIR / f'combined_dashboard_{tf_key}.gif', duration=220)
 
 
 # ---------------------------------------------------------------------------
