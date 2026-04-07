@@ -457,6 +457,63 @@ python3 scripts/gen_combined_dashboard.py        # 3 GIFs: combined_dashboard_{d
 
 ---
 
+## Statistical Validation: Multi-Asset Rolling Backtest
+
+The regime detection thresholds are validated out-of-sample across **10 assets** over **17-33 years** of real daily data using walk-forward methodology with T+1 execution delay, transaction costs (5 bps), and slippage (2 bps).
+
+### Methodology
+
+```bash
+python3 scripts/rolling_backtest.py
+```
+
+- **Assets**: SPY, QQQ, IWM, EFA, EEM, GLD, TLT, DIA, VGK, ACWI
+- **Period**: Maximum available from yfinance (up to 33 years for SPY)
+- **Threshold grid**: 36 combinations of `(crisis_vol, crisis_ret, reduce_vol, bull_ret)`
+- **Walk-forward**: 60-bar warmup, 252-bar training, T+1 execution delay
+- **4 statistical tests** per (asset, threshold) combination:
+
+| Test | What it checks | Method |
+|------|---------------|--------|
+| Sharpe t-test | Is Sharpe > 0? | Lo (2002) autocorrelation-adjusted |
+| Block Bootstrap | Is Sharpe CI above 0? | 2,000 circular block resamples |
+| Permutation test | Strategy > buy-and-hold? | 2,000 random reassignments |
+| Deflated Sharpe | Survives multiple testing? | Bailey & Lopez de Prado (2014) |
+
+### Results
+
+**Best threshold per asset** (highest Sharpe, must pass >=2 significance tests):
+
+| Asset | Sharpe | Alpha | MaxDD | Sortino | SR p-val | Bootstrap p-val |
+|-------|--------|-------|-------|---------|----------|-----------------|
+| SPY | 0.556 | -4.0% | 40.4% | 0.713 | <0.001 | 0.001 |
+| QQQ | 0.520 | -1.9% | 53.6% | 0.666 | <0.001 | 0.004 |
+| GLD | 0.551 | -3.9% | 37.7% | 0.688 | <0.001 | 0.006 |
+
+**Cross-asset robust thresholds** (significant on 3+ assets):
+
+| crisis_vol | crisis_ret | reduce_vol | bull_ret | Assets | Avg Sharpe |
+|-----------|-----------|-----------|---------|--------|------------|
+| 0.018 | -0.002 | 0.010 | 0.0003 | SPY, QQQ, GLD | 0.534 |
+| 0.018 | -0.001 | 0.010 | 0.0003 | SPY, QQQ, GLD | 0.534 |
+| 0.022 | -0.002 | 0.010 | 0.0003 | SPY, QQQ, GLD | 0.534 |
+
+### Key Findings
+
+- **Sharpe t-test**: Significant for **all 360/360** combinations across all assets (the strategy has positive risk-adjusted returns)
+- **Bootstrap**: Significant for SPY (36/36), QQQ (36/36), GLD (36/36) — these three assets show robust regime-based alpha
+- **Permutation test**: 0/360 significant — the strategy does not consistently *beat* buy-and-hold (alpha is negative). The positive Sharpe comes from **risk reduction** (lower drawdowns), not from higher returns
+- **Deflated Sharpe**: 0/360 significant — after correcting for 36 trials per asset, no Sharpe survives
+- **Overfitting check**: 108 significant results vs. 18 expected false positives — genuine signal exists, but it's a **risk-management** signal, not an **alpha** signal
+
+### Interpretation
+
+> The regime detection produces statistically significant **risk-adjusted returns** (positive Sharpe, lower drawdowns) but **negative alpha** vs. buy-and-hold. This means the strategy is valuable as a **risk management tool** — it reduces drawdowns by 10-40% — but does not beat buy-and-hold in raw returns. The cost of protection (missed upside during reduced exposure) exceeds the benefit of crash avoidance in cumulative return terms.
+>
+> The most robust threshold set across assets: `crisis_vol=0.018, reduce_vol=0.010, bull_ret=0.0003`. This is the default used in the C++ engine.
+
+---
+
 ## License
 
 MIT
