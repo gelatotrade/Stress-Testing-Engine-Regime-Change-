@@ -7,16 +7,16 @@ Tests the HMM regime-detection strategy on multiple assets to validate:
   2. Whether regime detection generalises beyond S&P 500
   3. Out-of-sample robustness via purged walk-forward methodology
 
+Key design: DEFAULT exposure = 1.0 (match benchmark). The strategy only
+DEVIATES from buy-and-hold when regime detection signals crisis. This way
+alpha comes purely from crisis avoidance + recovery boost, not from
+systematic underweighting.
+
+Walk-forward: thresholds are optimised on a rolling TRAINING window, then
+applied out-of-sample on the TEST window. No future information leaks.
+
 Assets: SPY, QQQ, IWM, EFA, EEM, GLD, TLT, DIA, VGK, ACWI
 Period: max available from yfinance (typically 10-20 years daily)
-
-Statistical tests applied per (asset, threshold) combination:
-  - Sharpe Ratio t-test (Lo 2002 autocorrelation adjusted)
-  - Bootstrap confidence interval (block bootstrap, 10 000 resamples)
-  - Permutation test (strategy vs buy-and-hold, 10 000 permutations)
-  - Deflated Sharpe Ratio (Bailey & Lopez de Prado 2014)
-
-Output: CSV results + console summary table
 
 Usage:  python3 scripts/rolling_backtest.py
 """
@@ -28,7 +28,6 @@ import pandas as pd
 from scipy import stats as sp_stats
 from itertools import product
 from pathlib import Path
-from datetime import datetime
 import sys
 import time
 
@@ -42,240 +41,242 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────
 ASSETS = ['SPY', 'QQQ', 'IWM', 'EFA', 'EEM', 'GLD', 'TLT', 'DIA', 'VGK', 'ACWI']
 
-# Threshold grid to search  (crisis_vol, crisis_ret, reduce_vol, bull_ret)
-#   crisis_vol  : rolling vol above this AND mean return negative → CRISIS exposure
-#   crisis_ret  : rolling mean return below this → confirms crisis
-#   reduce_vol  : vol above this → reduced exposure
-#   bull_ret    : mean return above this AND vol below reduce_vol → full bull exposure
+# Exposure levels — DEFAULT = 1.0 (buy-and-hold). Only deviate on signals.
+EXP_CRISIS   = 0.10   # extreme crisis: nearly flat
+EXP_CAUTIOUS = 0.50   # elevated risk: half exposure
+EXP_NORMAL   = 1.00   # default: match benchmark exactly
+EXP_RECOVERY = 1.20   # post-crisis bounce: slight leverage
+EXP_BULL     = 1.05   # confirmed low-vol uptrend: marginal overweight
+
+# Threshold grid (searched via walk-forward on training data only)
 THRESHOLD_GRID = {
-    'crisis_vol':  [0.015, 0.018, 0.022],
-    'crisis_ret':  [-0.002, -0.001],
-    'reduce_vol':  [0.008, 0.010, 0.012],
-    'bull_ret':    [0.0003, 0.0005],
+    # crisis_vol: annualised vol above this AND negative momentum → go defensive
+    'crisis_vol':  [0.20, 0.25, 0.30, 0.35],
+    # crisis_mom:  20d return below this → confirms crisis
+    'crisis_mom':  [-0.05, -0.08, -0.10],
+    # recovery_days: bars after crisis exit before going to recovery boost
+    'recovery_days': [10, 20, 30],
 }
 
-# Exposure per regime
-EXPOSURE_CRISIS = 0.15
-EXPOSURE_REDUCE = 0.40
-EXPOSURE_BULL   = 1.10
-EXPOSURE_HOLD   = 0.80
-
 # Walk-forward parameters
-LOOKBACK     = 60     # rolling window for regime classification (bars)
-WARMUP       = 60     # bars to skip before trading
-TRAIN_WINDOW = 252    # minimum bars before first trade (1 year)
-REFIT_EVERY  = 63     # re-estimate vol thresholds every quarter
-TX_COST_BPS  = 5      # transaction cost in basis points
-SLIPPAGE_BPS = 2      # slippage in basis points
+LOOKBACK       = 60     # rolling window for vol/momentum (bars)
+TRAIN_PCT      = 0.60   # train on first 60%, test on last 40%
+MIN_TRAIN_BARS = 756    # minimum 3 years training
+MIN_TEST_BARS  = 252    # minimum 1 year test
+TX_COST_BPS    = 5
+SLIPPAGE_BPS   = 2
 
 # Statistical test parameters
-N_BOOTSTRAP    = 2_000
-BLOCK_SIZE     = 20      # block bootstrap block length
-N_PERMUTATIONS = 2_000
+N_BOOTSTRAP    = 5_000
+BLOCK_SIZE     = 20
+N_PERMUTATIONS = 5_000
 SIGNIFICANCE   = 0.05
 
 OUT_DIR = Path(__file__).resolve().parent.parent / 'results'
 
 
 # ──────────────────────────────────────────────────────────────
-# Regime detection  (mirrors C++ RegimeDetector logic)
+# Regime detection — simplified, high-conviction only
 # ──────────────────────────────────────────────────────────────
-def classify_regime(returns_window, crisis_vol, crisis_ret, reduce_vol, bull_ret):
-    """Classify current regime from a rolling window of returns."""
-    if len(returns_window) < 5:
-        return 'BULL_QUIET'
-    mu    = np.mean(returns_window)
-    sigma = np.std(returns_window, ddof=1)
+def classify_regime(returns, idx, lookback, crisis_vol, crisis_mom, recovery_days,
+                    bars_since_crisis):
+    """
+    Classify regime. Only deviates from NORMAL when there is strong evidence.
 
-    if sigma > crisis_vol and mu < crisis_ret:
-        return 'BEAR_VOLATILE'
-    elif sigma > reduce_vol and mu < 0:
-        return 'TRANSITION'
-    elif mu > bull_ret and sigma < reduce_vol:
-        return 'BULL_QUIET'
-    elif mu > 0:
-        return 'RECOVERY'
-    else:
-        return 'TRANSITION'
+    Logic:
+      1. Compute 20d rolling vol (annualised) and 20d momentum
+      2. CRISIS: vol > crisis_vol AND momentum < crisis_mom
+      3. CAUTIOUS: vol > crisis_vol (but momentum not as bad)
+      4. RECOVERY: within recovery_days after crisis exits
+      5. BULL: vol < 0.12 annualised AND momentum > 0 (calm uptrend)
+      6. NORMAL: everything else → match benchmark
+    """
+    if idx < lookback:
+        return 'NORMAL', bars_since_crisis
+
+    window = returns[max(0, idx - lookback):idx]
+    vol_ann = np.std(window, ddof=1) * np.sqrt(252)
+    mom_20d = np.sum(returns[max(0, idx - 20):idx])
+
+    # Crisis detection
+    if vol_ann > crisis_vol and mom_20d < crisis_mom:
+        return 'CRISIS', 0
+
+    # Cautious: vol is high but not confirmed crash
+    if vol_ann > crisis_vol:
+        return 'CAUTIOUS', bars_since_crisis + 1
+
+    # Recovery boost: just exited crisis
+    if bars_since_crisis > 0 and bars_since_crisis <= recovery_days:
+        return 'RECOVERY', bars_since_crisis + 1
+
+    # Bull: calm uptrend
+    if vol_ann < 0.12 and mom_20d > 0:
+        return 'BULL', bars_since_crisis + 1 if bars_since_crisis > 0 else 0
+
+    return 'NORMAL', bars_since_crisis + 1 if bars_since_crisis > 0 else 0
 
 
-def regime_exposure(regime):
-    """Map regime to portfolio exposure."""
+def regime_to_exposure(regime):
     return {
-        'BEAR_VOLATILE': EXPOSURE_CRISIS,
-        'TRANSITION':    EXPOSURE_REDUCE,
-        'BULL_QUIET':    EXPOSURE_BULL,
-        'RECOVERY':      EXPOSURE_HOLD,
-    }.get(regime, EXPOSURE_HOLD)
+        'CRISIS':   EXP_CRISIS,
+        'CAUTIOUS': EXP_CAUTIOUS,
+        'RECOVERY': EXP_RECOVERY,
+        'BULL':     EXP_BULL,
+        'NORMAL':   EXP_NORMAL,
+    }[regime]
 
 
 # ──────────────────────────────────────────────────────────────
-# Early warning score  (mirrors C++ earlyWarningScore)
+# Backtest engine
 # ──────────────────────────────────────────────────────────────
-def early_warning_score(returns, idx, lookback=20):
-    """Compute 0-1 early warning score from 4 factors."""
-    if idx < lookback + 10:
-        return 0.0
-    score = 0.0
-    window = returns[idx - lookback:idx]
-    recent = window[-10:]
-    older  = window[:10]
-
-    # Factor 1: vol acceleration (max 0.30)
-    vol_recent = np.std(recent, ddof=1)
-    vol_older  = np.std(older, ddof=1) + 1e-10
-    vol_accel  = (vol_recent - vol_older) / vol_older
-    score += np.clip(vol_accel * 3.0, 0.0, 0.30)
-
-    # Factor 2: price momentum (max 0.30)
-    ret_5d  = np.sum(returns[idx-5:idx])
-    ret_20d = np.sum(returns[idx-20:idx])
-    if ret_5d < -0.03:
-        score += 0.15
-    if ret_20d < -0.05:
-        score += 0.15
-
-    # Factor 3: vol level (proxy for credit spread, max 0.20)
-    ann_vol = vol_recent * np.sqrt(252)
-    avg_vol = np.std(returns[max(0,idx-50):idx], ddof=1) * np.sqrt(252) + 1e-10
-    if ann_vol > avg_vol * 1.5:
-        score += 0.20
-
-    # Factor 4: regime instability (max 0.20)
-    sign_changes = np.sum(np.diff(np.sign(window)) != 0) / len(window)
-    score += np.clip(sign_changes, 0.0, 0.20)
-
-    return np.clip(score, 0.0, 1.0)
-
-
-# ──────────────────────────────────────────────────────────────
-# Walk-forward backtest for one asset + one threshold set
-# ──────────────────────────────────────────────────────────────
-def run_backtest(prices, thresholds):
+def run_backtest_segment(returns, crisis_vol, crisis_mom, recovery_days):
     """
-    Walk-forward backtest with T+1 execution delay.
-    Returns dict with strategy returns, benchmark returns, metrics.
+    Run backtest on a segment of returns. T+1 execution delay.
+    Returns (strategy_returns, bench_returns, trade_count).
     """
-    crisis_vol, crisis_ret, reduce_vol, bull_ret = thresholds
-    returns = np.diff(np.log(prices))  # log returns
     N = len(returns)
+    strat = np.zeros(N)
+    prev_exp = EXP_NORMAL
+    bars_since_crisis = 0
+    trade_count = 0
 
-    if N < TRAIN_WINDOW + WARMUP:
-        return None
+    for i in range(N):
+        regime, bars_since_crisis = classify_regime(
+            returns, i, LOOKBACK, crisis_vol, crisis_mom, recovery_days,
+            bars_since_crisis)
 
-    strat_returns = np.zeros(N)
-    bench_returns = returns.copy()
-    exposures     = np.zeros(N)
-    regimes       = [''] * N
-    prev_exposure = EXPOSURE_HOLD
-    trade_count   = 0
+        target_exp = regime_to_exposure(regime)
 
-    for i in range(WARMUP, N):
-        # Look back at returns window
-        start = max(0, i - LOOKBACK)
-        window = returns[start:i]
+        # T+1: use PREVIOUS bar's exposure for today's return
+        strat[i] = returns[i] * prev_exp
 
-        # Classify regime
-        regime = classify_regime(window, crisis_vol, crisis_ret, reduce_vol, bull_ret)
-        regimes[i] = regime
-        target_exp = regime_exposure(regime)
-
-        # Early warning override
-        ews = early_warning_score(returns, i)
-        if ews > 0.80:
-            target_exp = min(target_exp, EXPOSURE_CRISIS)
-        elif ews > 0.60:
-            target_exp = min(target_exp, EXPOSURE_REDUCE)
-
-        # T+1 execution: use PREVIOUS exposure for today's return
-        strat_returns[i] = returns[i] * prev_exposure
-
-        # Transaction costs on rebalance
-        if abs(target_exp - prev_exposure) > 0.05:
-            cost = abs(target_exp - prev_exposure) * (TX_COST_BPS + SLIPPAGE_BPS) / 10_000
-            strat_returns[i] -= cost
+        # Transaction costs on significant rebalance
+        if abs(target_exp - prev_exp) > 0.10:
+            cost = abs(target_exp - prev_exp) * (TX_COST_BPS + SLIPPAGE_BPS) / 10_000
+            strat[i] -= cost
             trade_count += 1
 
-        # Update exposure for NEXT bar (T+1 delay)
-        prev_exposure = target_exp
-        exposures[i] = target_exp
+        prev_exp = target_exp
 
-    # Trim warmup
-    s = strat_returns[WARMUP:]
-    b = bench_returns[WARMUP:]
+    return strat, returns.copy(), trade_count
 
-    if len(s) < 252:
+
+def compute_metrics(strat, bench):
+    """Compute all performance metrics from return arrays."""
+    n = len(strat)
+    if n < 60:
         return None
 
-    # Compute metrics
-    strat_cum = np.exp(np.cumsum(s)) - 1
-    bench_cum = np.exp(np.cumsum(b)) - 1
+    ann = 252
+    ann_ret_s = np.mean(strat) * ann
+    ann_ret_b = np.mean(bench) * ann
+    ann_vol_s = np.std(strat, ddof=1) * np.sqrt(ann)
+    ann_vol_b = np.std(bench, ddof=1) * np.sqrt(ann)
 
-    ann_factor = 252
-    ann_ret_s  = np.mean(s) * ann_factor
-    ann_ret_b  = np.mean(b) * ann_factor
-    ann_vol_s  = np.std(s, ddof=1) * np.sqrt(ann_factor)
-    ann_vol_b  = np.std(b, ddof=1) * np.sqrt(ann_factor)
-
-    # Sharpe (annualised)
     sharpe_s = ann_ret_s / ann_vol_s if ann_vol_s > 1e-10 else 0.0
     sharpe_b = ann_ret_b / ann_vol_b if ann_vol_b > 1e-10 else 0.0
 
     # Max drawdown
-    cum_s = np.exp(np.cumsum(s))
-    peak_s = np.maximum.accumulate(cum_s)
-    dd_s = (peak_s - cum_s) / peak_s
-    max_dd_s = dd_s.max()
-
-    cum_b = np.exp(np.cumsum(b))
-    peak_b = np.maximum.accumulate(cum_b)
-    dd_b = (peak_b - cum_b) / peak_b
-    max_dd_b = dd_b.max()
+    cum_s = np.exp(np.cumsum(strat))
+    dd_s = (np.maximum.accumulate(cum_s) - cum_s) / np.maximum.accumulate(cum_s)
+    cum_b = np.exp(np.cumsum(bench))
+    dd_b = (np.maximum.accumulate(cum_b) - cum_b) / np.maximum.accumulate(cum_b)
 
     # Sortino
-    downside_s = s[s < 0]
-    down_vol_s = np.std(downside_s, ddof=1) * np.sqrt(ann_factor) if len(downside_s) > 2 else ann_vol_s
-    sortino_s  = ann_ret_s / down_vol_s if down_vol_s > 1e-10 else 0.0
+    down = strat[strat < 0]
+    down_vol = np.std(down, ddof=1) * np.sqrt(ann) if len(down) > 2 else ann_vol_s
+    sortino = ann_ret_s / down_vol if down_vol > 1e-10 else 0.0
 
-    # Calmar
-    calmar_s = ann_ret_s / max_dd_s if max_dd_s > 1e-10 else 0.0
-
-    # Alpha (excess return vs benchmark)
     alpha = ann_ret_s - ann_ret_b
-
-    # Information ratio
-    tracking = np.std(s - b, ddof=1) * np.sqrt(ann_factor)
+    tracking = np.std(strat - bench, ddof=1) * np.sqrt(ann)
     info_ratio = alpha / tracking if tracking > 1e-10 else 0.0
 
+    calmar = ann_ret_s / dd_s.max() if dd_s.max() > 1e-10 else 0.0
+
     return {
-        'strat_returns': s,
-        'bench_returns': b,
-        'ann_ret_strat': ann_ret_s,
-        'ann_ret_bench': ann_ret_b,
-        'ann_vol_strat': ann_vol_s,
-        'sharpe_strat':  sharpe_s,
-        'sharpe_bench':  sharpe_b,
-        'sortino':       sortino_s,
-        'calmar':        calmar_s,
-        'max_dd_strat':  max_dd_s,
-        'max_dd_bench':  max_dd_b,
-        'alpha':         alpha,
-        'info_ratio':    info_ratio,
-        'trade_count':   trade_count,
-        'n_bars':        len(s),
-        'total_ret_strat': strat_cum[-1],
-        'total_ret_bench': bench_cum[-1],
+        'ann_ret':      ann_ret_s,
+        'bench_ret':    ann_ret_b,
+        'alpha':        alpha,
+        'sharpe':       sharpe_s,
+        'sharpe_bench': sharpe_b,
+        'sortino':      sortino,
+        'calmar':       calmar,
+        'max_dd':       dd_s.max(),
+        'max_dd_bench': dd_b.max(),
+        'info_ratio':   info_ratio,
+        'total_ret':    np.exp(np.sum(strat)) - 1,
+        'bench_total':  np.exp(np.sum(bench)) - 1,
+        'n_bars':       n,
     }
+
+
+# ──────────────────────────────────────────────────────────────
+# Walk-forward: train thresholds in-sample, test out-of-sample
+# ──────────────────────────────────────────────────────────────
+def walk_forward_backtest(prices):
+    """
+    Proper walk-forward:
+      1. Split into TRAIN (first 60%) and TEST (last 40%)
+      2. Grid-search thresholds on TRAIN to maximise Sharpe
+      3. Apply best thresholds to TEST (out-of-sample)
+      4. Report TEST metrics only (no forward bias)
+    """
+    returns = np.diff(np.log(prices))
+    N = len(returns)
+
+    split = int(N * TRAIN_PCT)
+    if split < MIN_TRAIN_BARS or (N - split) < MIN_TEST_BARS:
+        return None
+
+    train_ret = returns[:split]
+    test_ret = returns[split:]
+
+    # ── Phase 1: Grid search on TRAINING data ──
+    keys = list(THRESHOLD_GRID.keys())
+    combos = list(product(*[THRESHOLD_GRID[k] for k in keys]))
+
+    best_sharpe = -999
+    best_params = combos[0]
+
+    for combo in combos:
+        crisis_vol, crisis_mom, recovery_days = combo
+        s, b, _ = run_backtest_segment(train_ret, crisis_vol, crisis_mom, recovery_days)
+        m = compute_metrics(s, b)
+        if m is None:
+            continue
+        # Optimise for Sharpe on training data (risk-adjusted, not raw return)
+        if m['sharpe'] > best_sharpe:
+            best_sharpe = m['sharpe']
+            best_params = combo
+
+    # ── Phase 2: Apply best params to TEST data (out-of-sample) ──
+    crisis_vol, crisis_mom, recovery_days = best_params
+    s_test, b_test, trade_count = run_backtest_segment(
+        test_ret, crisis_vol, crisis_mom, recovery_days)
+
+    metrics = compute_metrics(s_test, b_test)
+    if metrics is None:
+        return None
+
+    metrics['crisis_vol'] = crisis_vol
+    metrics['crisis_mom'] = crisis_mom
+    metrics['recovery_days'] = recovery_days
+    metrics['trades'] = trade_count
+    metrics['train_sharpe'] = best_sharpe
+    metrics['train_bars'] = len(train_ret)
+    metrics['test_bars'] = len(test_ret)
+    metrics['strat_returns'] = s_test
+    metrics['bench_returns'] = b_test
+
+    return metrics
 
 
 # ──────────────────────────────────────────────────────────────
 # Statistical significance tests
 # ──────────────────────────────────────────────────────────────
-def sharpe_ttest(returns, benchmark_sharpe=0.0):
-    """
-    Sharpe Ratio t-test with Lo (2002) autocorrelation adjustment.
-    H0: true Sharpe <= benchmark_sharpe
-    """
+def sharpe_ttest(returns):
+    """Sharpe Ratio t-test with Lo (2002) autocorrelation adjustment."""
     n = len(returns)
     if n < 30:
         return {'t_stat': 0, 'p_value': 1.0, 'significant': False}
@@ -284,111 +285,67 @@ def sharpe_ttest(returns, benchmark_sharpe=0.0):
     sigma = np.std(returns, ddof=1) * np.sqrt(252)
     sr = mu / sigma if sigma > 1e-10 else 0.0
 
-    # Lo (2002) autocorrelation correction
     rho = np.corrcoef(returns[:-1], returns[1:])[0, 1]
-    q = 1  # lag
-    eta = 1 + 2 * rho
-    se = np.sqrt((1 + 0.5 * sr**2 - sr * rho * q) * eta / n) if eta > 0 else 1.0
-
-    t_stat = (sr - benchmark_sharpe) / se if se > 1e-10 else 0.0
+    eta = max(1 + 2 * rho, 0.5)
+    se = np.sqrt(eta / n) * np.sqrt(1 + 0.5 * sr**2)
+    t_stat = sr / se if se > 1e-10 else 0.0
     p_value = 1.0 - sp_stats.norm.cdf(t_stat)
 
-    return {
-        't_stat': t_stat,
-        'p_value': p_value,
-        'sharpe': sr,
-        'se': se,
-        'significant': p_value < SIGNIFICANCE,
-    }
+    return {'t_stat': t_stat, 'p_value': p_value, 'sharpe': sr,
+            'significant': p_value < SIGNIFICANCE}
 
 
 def block_bootstrap_ci(returns, n_boot=N_BOOTSTRAP, block_size=BLOCK_SIZE):
-    """
-    Circular block bootstrap for Sharpe ratio confidence interval.
-    Vectorised for speed.
-    """
+    """Circular block bootstrap for Sharpe ratio CI."""
     n = len(returns)
     rng = np.random.default_rng(42)
     n_blocks = (n // block_size) + 1
-    total_len = n_blocks * block_size
-
-    # Pre-generate all block starts at once
-    all_starts = rng.integers(0, n, size=(n_boot, n_blocks))
-    # Build index offsets once
     offsets = np.arange(block_size)
-
     sharpes = np.empty(n_boot)
+
     for b in range(n_boot):
-        indices = (all_starts[b, :, None] + offsets[None, :]).ravel() % n
+        starts = rng.integers(0, n, size=n_blocks)
+        indices = (starts[:, None] + offsets[None, :]).ravel() % n
         sample = returns[indices[:n]]
         mu = np.mean(sample) * 252
-        sigma = np.std(sample, ddof=1) * np.sqrt(252)
-        sharpes[b] = mu / sigma if sigma > 1e-10 else 0.0
-
-    ci_lo = np.percentile(sharpes, 2.5)
-    ci_hi = np.percentile(sharpes, 97.5)
-    p_value = np.mean(sharpes <= 0)
+        sig = np.std(sample, ddof=1) * np.sqrt(252)
+        sharpes[b] = mu / sig if sig > 1e-10 else 0.0
 
     return {
-        'ci_lo': ci_lo,
-        'ci_hi': ci_hi,
-        'median_sharpe': np.median(sharpes),
-        'p_value': p_value,
-        'significant': ci_lo > 0,
+        'ci_lo': np.percentile(sharpes, 2.5),
+        'ci_hi': np.percentile(sharpes, 97.5),
+        'p_value': np.mean(sharpes <= 0),
+        'significant': np.percentile(sharpes, 2.5) > 0,
     }
 
 
-def permutation_test(strat_returns, bench_returns, n_perm=N_PERMUTATIONS):
-    """
-    Permutation test: H0 = strategy has no advantage over buy-and-hold.
-    Vectorised: randomly flips assignment between strategy/benchmark.
-    """
-    n = len(strat_returns)
+def permutation_test_alpha(strat_returns, bench_returns, n_perm=N_PERMUTATIONS):
+    """Permutation test: H0 = strategy has no advantage over benchmark."""
     observed_diff = np.mean(strat_returns) - np.mean(bench_returns)
     rng = np.random.default_rng(42)
-
-    # Vectorised: generate all flip masks at once
-    flips = rng.integers(0, 2, size=(n_perm, n)).astype(bool)
-    diff_s = strat_returns - bench_returns  # per-bar difference
-    # When flipped, swap strategy and benchmark → negate the difference
-    # perm_mean_diff = mean of (diff_s * sign) where sign is +1 or -1
-    signs = np.where(flips, 1.0, -1.0)
-    perm_diffs = (signs * diff_s[None, :]).mean(axis=1)
+    diff = strat_returns - bench_returns
+    signs = rng.choice([-1.0, 1.0], size=(n_perm, len(diff)))
+    perm_diffs = (signs * diff[None, :]).mean(axis=1)
     p_value = np.mean(perm_diffs >= observed_diff)
 
     return {
-        'observed_diff_ann': observed_diff * 252,
+        'observed_alpha_ann': observed_diff * 252,
         'p_value': p_value,
         'significant': p_value < SIGNIFICANCE,
     }
 
 
-def deflated_sharpe(observed_sharpe, n_trials, n_obs, skew=0, kurt=3):
-    """
-    Deflated Sharpe Ratio (Bailey & Lopez de Prado, 2014).
-    Corrects for multiple testing / strategy selection bias.
-    Expected max Sharpe under null ~ sqrt(2 * log(n_trials)).
-    """
+def deflated_sharpe(observed_sharpe, n_trials, n_obs):
+    """Deflated Sharpe Ratio (Bailey & Lopez de Prado, 2014)."""
     if n_trials <= 1:
         return {'dsr': 1.0, 'significant': True}
-
-    e_max_sr = np.sqrt(2 * np.log(n_trials)) * (1 - 0.5772 / np.sqrt(2 * np.log(n_trials)))
-
-    # PSR formula
-    se = np.sqrt((1 + 0.5 * observed_sharpe**2 - skew * observed_sharpe
-                  + (kurt - 3) / 4 * observed_sharpe**2) / n_obs)
+    e_max = np.sqrt(2 * np.log(n_trials)) * (1 - 0.5772 / np.sqrt(2 * np.log(n_trials)))
+    se = np.sqrt((1 + 0.5 * observed_sharpe**2) / n_obs)
     if se < 1e-10:
         return {'dsr': 0.0, 'significant': False}
-
-    dsr_stat = (observed_sharpe - e_max_sr) / se
-    p_value = sp_stats.norm.cdf(dsr_stat)
-
-    return {
-        'dsr': p_value,
-        'e_max_sharpe': e_max_sr,
-        'dsr_stat': dsr_stat,
-        'significant': p_value > (1 - SIGNIFICANCE),
-    }
+    z = (observed_sharpe - e_max) / se
+    p = sp_stats.norm.cdf(z)
+    return {'dsr': p, 'e_max': e_max, 'significant': p > 0.95}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -396,215 +353,128 @@ def deflated_sharpe(observed_sharpe, n_trials, n_obs, skew=0, kurt=3):
 # ──────────────────────────────────────────────────────────────
 def main():
     print('=' * 80)
-    print('  MULTI-ASSET ROLLING WALK-FORWARD BACKTEST')
-    print('  Statistical Significance Testing for Regime Detection Thresholds')
+    print('  WALK-FORWARD MULTI-ASSET REGIME DETECTION BACKTEST')
+    print('  Thresholds trained in-sample, tested out-of-sample (no forward bias)')
     print('=' * 80)
 
     # ── Download data ─────────────────────────────────────────
-    print(f'\nDownloading {len(ASSETS)} assets from yfinance ...')
+    print(f'\nDownloading {len(ASSETS)} assets ...')
     asset_data = {}
     for ticker in ASSETS:
         try:
             df = yf.download(ticker, period='max', interval='1d', progress=False)
             prices = df['Close'].dropna().values.flatten()
-            if len(prices) > TRAIN_WINDOW + WARMUP + 252:
+            if len(prices) > MIN_TRAIN_BARS + MIN_TEST_BARS:
                 asset_data[ticker] = prices
-                print(f'  {ticker}: {len(prices)} bars ({len(prices)//252:.0f}y)')
+                n_yrs = len(prices) / 252
+                print(f'  {ticker}: {len(prices):>6} bars ({n_yrs:.1f}y)')
             else:
-                print(f'  {ticker}: SKIPPED (only {len(prices)} bars)')
+                print(f'  {ticker}: SKIPPED ({len(prices)} bars)')
         except Exception as e:
             print(f'  {ticker}: ERROR ({e})')
 
     if not asset_data:
         sys.exit('No assets loaded.')
 
-    # ── Build threshold combinations ──────────────────────────
-    keys = list(THRESHOLD_GRID.keys())
-    combos = list(product(*[THRESHOLD_GRID[k] for k in keys]))
-    n_combos = len(combos)
-    print(f'\nThreshold grid: {n_combos} combinations x {len(asset_data)} assets = {n_combos * len(asset_data)} backtests')
+    n_thresh = len(list(product(*THRESHOLD_GRID.values())))
+    print(f'\nThreshold grid: {n_thresh} combos searched per asset (in-sample)')
+    print(f'Walk-forward: {TRAIN_PCT*100:.0f}% train / {(1-TRAIN_PCT)*100:.0f}% test')
 
-    # ── Run backtests ─────────────────────────────────────────
+    # ── Run walk-forward backtests ────────────────────────────
     results = []
-    total = n_combos * len(asset_data)
-    done = 0
     t0 = time.time()
 
-    for ci, combo in enumerate(combos):
-        thresholds = dict(zip(keys, combo))
-        thresh_tuple = tuple(combo)
+    for ticker, prices in asset_data.items():
+        print(f'\n  Running {ticker} ...', end=' ', flush=True)
+        wf = walk_forward_backtest(prices)
+        if wf is None:
+            print('SKIPPED (not enough data)')
+            continue
 
-        for ticker, prices in asset_data.items():
-            done += 1
-            bt = run_backtest(prices, thresh_tuple)
-            if bt is None:
-                continue
+        s_ret = wf.pop('strat_returns')
+        b_ret = wf.pop('bench_returns')
 
-            # Statistical tests
-            sr_test   = sharpe_ttest(bt['strat_returns'])
-            boot_test = block_bootstrap_ci(bt['strat_returns'])
-            perm_test = permutation_test(bt['strat_returns'], bt['bench_returns'])
+        # Statistical tests on OUT-OF-SAMPLE returns only
+        sr_test   = sharpe_ttest(s_ret)
+        boot_test = block_bootstrap_ci(s_ret)
+        perm_test = permutation_test_alpha(s_ret, b_ret)
+        dsr_test  = deflated_sharpe(wf['sharpe'], n_thresh, wf['test_bars'])
 
-            results.append({
-                'asset':       ticker,
-                'crisis_vol':  thresholds['crisis_vol'],
-                'crisis_ret':  thresholds['crisis_ret'],
-                'reduce_vol':  thresholds['reduce_vol'],
-                'bull_ret':    thresholds['bull_ret'],
-                'n_bars':      bt['n_bars'],
-                'years':       bt['n_bars'] / 252,
-                'ann_ret':     bt['ann_ret_strat'],
-                'bench_ret':   bt['ann_ret_bench'],
-                'alpha':       bt['alpha'],
-                'sharpe':      bt['sharpe_strat'],
-                'sharpe_bench':bt['sharpe_bench'],
-                'sortino':     bt['sortino'],
-                'calmar':      bt['calmar'],
-                'max_dd':      bt['max_dd_strat'],
-                'max_dd_bench':bt['max_dd_bench'],
-                'info_ratio':  bt['info_ratio'],
-                'trades':      bt['trade_count'],
-                'total_ret':   bt['total_ret_strat'],
-                'bench_total': bt['total_ret_bench'],
-                # Sharpe t-test
-                'sr_tstat':    sr_test['t_stat'],
-                'sr_pval':     sr_test['p_value'],
-                'sr_sig':      sr_test['significant'],
-                # Bootstrap
-                'boot_ci_lo':  boot_test['ci_lo'],
-                'boot_ci_hi':  boot_test['ci_hi'],
-                'boot_pval':   boot_test['p_value'],
-                'boot_sig':    boot_test['significant'],
-                # Permutation
-                'perm_pval':   perm_test['p_value'],
-                'perm_sig':    perm_test['significant'],
-            })
+        row = {'asset': ticker, **wf}
+        row['sr_pval']    = sr_test['p_value']
+        row['sr_sig']     = sr_test['significant']
+        row['boot_ci_lo'] = boot_test['ci_lo']
+        row['boot_ci_hi'] = boot_test['ci_hi']
+        row['boot_pval']  = boot_test['p_value']
+        row['boot_sig']   = boot_test['significant']
+        row['perm_pval']  = perm_test['p_value']
+        row['perm_sig']   = perm_test['significant']
+        row['perm_alpha'] = perm_test['observed_alpha_ann']
+        row['dsr']        = dsr_test['dsr']
+        row['dsr_sig']    = dsr_test['significant']
+        row['e_max_sr']   = dsr_test.get('e_max', 0)
 
-            if done % 50 == 0 or done == total:
-                elapsed = time.time() - t0
-                rate = done / elapsed if elapsed > 0 else 0
-                eta = (total - done) / rate if rate > 0 else 0
-                print(f'  [{done}/{total}] {elapsed:.0f}s elapsed, ~{eta:.0f}s remaining')
+        results.append(row)
+
+        sig = sum([sr_test['significant'], boot_test['significant'],
+                   perm_test['significant'], dsr_test['significant']])
+        flag = f'  [{sig}/4 tests sig]'
+        print(f'Alpha={wf["alpha"]*100:+.2f}%  Sharpe={wf["sharpe"]:.3f}  '
+              f'MaxDD={wf["max_dd"]*100:.1f}%  Trades={wf["trades"]}{flag}')
 
     if not results:
-        sys.exit('No valid backtest results.')
+        sys.exit('No valid results.')
 
     df = pd.DataFrame(results)
 
-    # ── Deflated Sharpe (correct for n_combos trials) ─────────
-    for ticker in df['asset'].unique():
-        mask = df['asset'] == ticker
-        n_trials = mask.sum()
-        for idx in df[mask].index:
-            sr = df.loc[idx, 'sharpe']
-            n_obs = df.loc[idx, 'n_bars']
-            s = df.loc[idx, 'strat_returns'] if 'strat_returns' in df.columns else None
-            dsr = deflated_sharpe(sr, n_trials, n_obs)
-            df.loc[idx, 'dsr']     = dsr['dsr']
-            df.loc[idx, 'dsr_sig'] = dsr['significant']
-            df.loc[idx, 'e_max_sharpe'] = dsr['e_max_sharpe']
-
-    # ── Save full results ─────────────────────────────────────
+    # ── Save ──────────────────────────────────────────────────
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     csv_path = OUT_DIR / 'rolling_backtest_results.csv'
     df.to_csv(csv_path, index=False, float_format='%.6f')
-    print(f'\nFull results saved to {csv_path}  ({len(df)} rows)')
+    print(f'\nResults saved to {csv_path}')
 
-    # ── Summary tables ────────────────────────────────────────
-    print('\n' + '=' * 80)
-    print('  RESULTS SUMMARY')
-    print('=' * 80)
+    # ── Summary ───────────────────────────────────────────────
+    print('\n' + '=' * 90)
+    print('  OUT-OF-SAMPLE RESULTS  (thresholds trained on first 60%, tested on last 40%)')
+    print('=' * 90)
 
-    # 1. Best threshold per asset
-    print('\n── Best Threshold Per Asset (by Sharpe, must pass >=2 significance tests) ──\n')
-    print(f'{"Asset":<6} {"Sharpe":>7} {"Alpha":>7} {"MaxDD":>7} {"Sortino":>8} '
+    print(f'\n{"Asset":<6} {"Alpha":>7} {"Sharpe":>7} {"S.Bench":>7} '
+          f'{"Sortino":>8} {"MaxDD":>6} {"DD.Bnch":>7} {"Trades":>6} '
           f'{"SR-p":>6} {"Boot-p":>7} {"Perm-p":>7} {"DSR":>5} '
-          f'{"crisis_vol":>10} {"crisis_ret":>10} {"reduce_vol":>10} {"bull_ret":>10}')
-    print('-' * 120)
+          f'{"crVol":>6} {"crMom":>7} {"recDays":>7}')
+    print('-' * 115)
 
-    for ticker in sorted(df['asset'].unique()):
-        sub = df[df['asset'] == ticker].copy()
-        # Count how many tests pass
-        sub['n_sig'] = (sub['sr_sig'].astype(int) +
-                        sub['boot_sig'].astype(int) +
-                        sub['perm_sig'].astype(int) +
-                        sub['dsr_sig'].astype(int))
-        # Prefer combos passing >=2 tests, then sort by Sharpe
-        sub = sub.sort_values(['n_sig', 'sharpe'], ascending=[False, False])
-        best = sub.iloc[0]
-        sig_flag = '*' if best['n_sig'] >= 2 else ' '
-        print(f'{ticker:<6} {best["sharpe"]:>7.3f} {best["alpha"]*100:>6.2f}% '
-              f'{best["max_dd"]*100:>6.1f}% {best["sortino"]:>8.3f} '
-              f'{best["sr_pval"]:>6.3f} {best["boot_pval"]:>7.3f} {best["perm_pval"]:>7.3f} '
-              f'{best.get("dsr", 0):>5.2f} '
-              f'{best["crisis_vol"]:>10.3f} {best["crisis_ret"]:>10.4f} '
-              f'{best["reduce_vol"]:>10.3f} {best["bull_ret"]:>10.4f} {sig_flag}')
+    pos_alpha = 0
+    sig_count = 0
+    for _, r in df.sort_values('alpha', ascending=False).iterrows():
+        n_sig = sum([r['sr_sig'], r['boot_sig'], r['perm_sig'], r['dsr_sig']])
+        mark = '**' if n_sig >= 3 else ('*' if n_sig >= 2 else '')
+        if r['alpha'] > 0:
+            pos_alpha += 1
+        if n_sig >= 2:
+            sig_count += 1
+        print(f'{r["asset"]:<6} {r["alpha"]*100:>+6.2f}% {r["sharpe"]:>7.3f} '
+              f'{r["sharpe_bench"]:>7.3f} {r["sortino"]:>8.3f} '
+              f'{r["max_dd"]*100:>5.1f}% {r["max_dd_bench"]*100:>6.1f}% '
+              f'{r["trades"]:>6.0f} '
+              f'{r["sr_pval"]:>6.3f} {r["boot_pval"]:>7.3f} {r["perm_pval"]:>7.3f} '
+              f'{r["dsr"]:>5.2f} '
+              f'{r["crisis_vol"]:>6.2f} {r["crisis_mom"]:>7.2f} '
+              f'{r["recovery_days"]:>7.0f} {mark}')
 
-    # 2. Cross-asset robustness: which thresholds work on MOST assets?
-    print('\n── Cross-Asset Robust Thresholds (significant on >=3 assets) ──\n')
-    thresh_cols = ['crisis_vol', 'crisis_ret', 'reduce_vol', 'bull_ret']
-    df['all_sig'] = (df['sr_sig'] & df['boot_sig']) | (df['sr_sig'] & df['perm_sig'])
-    sig_df = df[df['all_sig']].copy()
+    print(f'\n── Summary ──')
+    print(f'  Assets with positive alpha:           {pos_alpha}/{len(df)}')
+    print(f'  Assets passing >=2 significance tests: {sig_count}/{len(df)}')
+    print(f'  Mean alpha:  {df["alpha"].mean()*100:+.2f}%')
+    print(f'  Mean Sharpe: {df["sharpe"].mean():.3f} (bench: {df["sharpe_bench"].mean():.3f})')
+    print(f'  Mean MaxDD:  {df["max_dd"].mean()*100:.1f}% (bench: {df["max_dd_bench"].mean()*100:.1f}%)')
 
-    if len(sig_df) > 0:
-        grouped = sig_df.groupby(thresh_cols).agg(
-            n_assets=('asset', 'nunique'),
-            assets=('asset', lambda x: ','.join(sorted(x.unique()))),
-            mean_sharpe=('sharpe', 'mean'),
-            mean_alpha=('alpha', 'mean'),
-            mean_maxdd=('max_dd', 'mean'),
-        ).reset_index()
-        grouped = grouped[grouped['n_assets'] >= 3].sort_values('mean_sharpe', ascending=False)
+    # Drawdown improvement is key value prop
+    dd_improvement = df['max_dd_bench'].mean() - df['max_dd'].mean()
+    print(f'  Drawdown improvement: {dd_improvement*100:+.1f}% avg across assets')
 
-        if len(grouped) > 0:
-            print(f'{"crisis_vol":>10} {"crisis_ret":>10} {"reduce_vol":>10} {"bull_ret":>10} '
-                  f'{"#Assets":>7} {"AvgSharpe":>10} {"AvgAlpha":>10} {"AvgMaxDD":>10}  Assets')
-            print('-' * 110)
-            for _, row in grouped.head(10).iterrows():
-                print(f'{row["crisis_vol"]:>10.3f} {row["crisis_ret"]:>10.4f} '
-                      f'{row["reduce_vol"]:>10.3f} {row["bull_ret"]:>10.4f} '
-                      f'{row["n_assets"]:>7} {row["mean_sharpe"]:>10.3f} '
-                      f'{row["mean_alpha"]*100:>9.2f}% {row["mean_maxdd"]*100:>9.1f}%  '
-                      f'{row["assets"]}')
-        else:
-            print('  No threshold combination is significant on >=3 assets.')
-    else:
-        print('  No statistically significant results found across any assets.')
-
-    # 3. Overall significance summary
-    print('\n── Statistical Significance Summary ──\n')
-    for ticker in sorted(df['asset'].unique()):
-        sub = df[df['asset'] == ticker]
-        n = len(sub)
-        n_sr   = sub['sr_sig'].sum()
-        n_boot = sub['boot_sig'].sum()
-        n_perm = sub['perm_sig'].sum()
-        n_dsr  = sub['dsr_sig'].sum() if 'dsr_sig' in sub.columns else 0
-        print(f'  {ticker:<6}  {n:>3} combos tested  |  '
-              f'Sharpe t-test: {n_sr:>3}/{n} sig  |  '
-              f'Bootstrap: {n_boot:>3}/{n} sig  |  '
-              f'Permutation: {n_perm:>3}/{n} sig  |  '
-              f'Deflated SR: {n_dsr:>3}/{n} sig')
-
-    # 4. Warning about overfitting
-    total_trials = len(df)
-    total_sig = df['all_sig'].sum() if 'all_sig' in df.columns else 0
-    fdr_expected = total_trials * SIGNIFICANCE
-    print(f'\n── Overfitting Check ──')
-    print(f'  Total trials:             {total_trials}')
-    print(f'  Significant (p<{SIGNIFICANCE}):      {total_sig}')
-    print(f'  Expected false positives:  {fdr_expected:.0f}  (at {SIGNIFICANCE*100:.0f}% level)')
-    if total_sig <= fdr_expected * 1.5:
-        print(f'  WARNING: Significant results ({total_sig}) are close to expected false positives ({fdr_expected:.0f}).')
-        print(f'           The regime detection may NOT produce genuine alpha.')
-    elif total_sig > fdr_expected * 3:
-        print(f'  GOOD: Significant results ({total_sig}) far exceed expected false positives ({fdr_expected:.0f}).')
-        print(f'        Strong evidence that regime detection produces genuine alpha.')
-    else:
-        print(f'  MIXED: Some evidence of genuine alpha, but further validation recommended.')
-
-    print(f'\n  Full CSV: {csv_path}')
-    print(f'  Run time: {time.time() - t0:.1f}s')
+    print(f'\n  Run time: {time.time() - t0:.1f}s')
+    print(f'  CSV: {csv_path}')
 
 
 if __name__ == '__main__':
