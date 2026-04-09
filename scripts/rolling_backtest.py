@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 """
-Multi-Asset Rolling Walk-Forward Backtest with Statistical Significance Testing.
+Market-Maker Regime-Detection Backtest — Limit Orders & Maker Rebates.
 
-Tests the HMM regime-detection strategy on multiple assets to validate:
-  1. Which thresholds actually produce statistically significant alpha
-  2. Whether regime detection generalises beyond S&P 500
-  3. Out-of-sample robustness via purged walk-forward methodology
+Architecture:
+  BASE POSITION = 100% long (captures equity premium, matches benchmark).
+  OVERLAY = market-making via limit orders around fair value.
+  REGIME  = controls spread width, overlay size, and base position trim.
 
-Key design: DEFAULT exposure = 1.0 (match benchmark). The strategy only
-DEVIATES from buy-and-hold when regime detection signals crisis. This way
-alpha comes purely from crisis avoidance + recovery boost, not from
-systematic underweighting.
+Alpha sources:
+  1. Spread capture: buy at bid, sell at ask → pocket the spread
+  2. Maker rebates: +0.20 bps per filled limit order (not paying taker -0.30)
+  3. Mean-reversion scalping: multiple limit levels catch intraday swings
+  4. Crisis avoidance: trim base position 10-20% during bear volatile
 
-Walk-forward: thresholds are optimised on a rolling TRAINING window, then
-applied out-of-sample on the TEST window. No future information leaks.
+Key: the strategy is ALWAYS ~90-100% invested. Alpha comes from the
+market-making overlay ON TOP of the base position, not from timing.
 
-Assets: SPY, QQQ, IWM, EFA, EEM, GLD, TLT, DIA, VGK, ACWI
-Period: max available from yfinance (typically 10-20 years daily)
+OHLC fill model: multiple limit levels per bar. A limit at price P fills
+if the bar's range [Low, High] crosses P. Number of fills per bar scales
+with the day's range.
+
+Walk-forward: params trained on first 60%, tested on last 40%.
 
 Usage:  python3 scripts/rolling_backtest.py
 """
@@ -28,45 +32,36 @@ import pandas as pd
 from scipy import stats as sp_stats
 from itertools import product
 from pathlib import Path
-import sys
-import time
+import sys, time
 
 try:
     import yfinance as yf
 except ImportError:
     sys.exit('pip install yfinance')
 
-# ──────────────────────────────────────────────────────────────
-# Config
-# ──────────────────────────────────────────────────────────────
+# ── Fee structure (NYSE/NASDAQ typical) ──
+MAKER_REBATE_BPS = 0.20
+SEC_FEE_BPS      = 0.02
+
+# ── Assets ──
 ASSETS = ['SPY', 'QQQ', 'IWM', 'EFA', 'EEM', 'GLD', 'TLT', 'DIA', 'VGK', 'ACWI']
 
-# Exposure levels — DEFAULT = 1.0 (buy-and-hold). Only deviate on signals.
-EXP_CRISIS   = 0.10   # extreme crisis: nearly flat
-EXP_CAUTIOUS = 0.50   # elevated risk: half exposure
-EXP_NORMAL   = 1.00   # default: match benchmark exactly
-EXP_RECOVERY = 1.20   # post-crisis bounce: slight leverage
-EXP_BULL     = 1.05   # confirmed low-vol uptrend: marginal overweight
+# ── Walk-forward ──
+TRAIN_PCT      = 0.60
+MIN_TRAIN_BARS = 756
+MIN_TEST_BARS  = 252
+EMA_LEN        = 10
 
-# Threshold grid (searched via walk-forward on training data only)
-THRESHOLD_GRID = {
-    # crisis_vol: annualised vol above this AND negative momentum → go defensive
-    'crisis_vol':  [0.20, 0.25, 0.30, 0.35],
-    # crisis_mom:  20d return below this → confirms crisis
-    'crisis_mom':  [-0.05, -0.08, -0.10],
-    # recovery_days: bars after crisis exit before going to recovery boost
-    'recovery_days': [10, 20, 30],
+# ── Parameter grid (walk-forward searched) ──
+PARAM_GRID = {
+    'n_levels':       [3, 5],          # limit levels per side
+    'level_step_bps': [3, 5, 8],       # bps between levels
+    'order_size':     [0.03, 0.05],    # per-level order as fraction of capital
+    'crisis_vol':     [0.22, 0.28],    # annualised vol for crisis
+    'crisis_trim':    [0.05, 0.10],    # how much to trim base in crisis
 }
 
-# Walk-forward parameters
-LOOKBACK       = 60     # rolling window for vol/momentum (bars)
-TRAIN_PCT      = 0.60   # train on first 60%, test on last 40%
-MIN_TRAIN_BARS = 756    # minimum 3 years training
-MIN_TEST_BARS  = 252    # minimum 1 year test
-TX_COST_BPS    = 5
-SLIPPAGE_BPS   = 2
-
-# Statistical test parameters
+# ── Stats ──
 N_BOOTSTRAP    = 5_000
 BLOCK_SIZE     = 20
 N_PERMUTATIONS = 5_000
@@ -76,406 +71,371 @@ OUT_DIR = Path(__file__).resolve().parent.parent / 'results'
 
 
 # ──────────────────────────────────────────────────────────────
-# Regime detection — simplified, high-conviction only
+# Regime detection (simple, robust)
 # ──────────────────────────────────────────────────────────────
-def classify_regime(returns, idx, lookback, crisis_vol, crisis_mom, recovery_days,
-                    bars_since_crisis):
-    """
-    Classify regime. Only deviates from NORMAL when there is strong evidence.
-
-    Logic:
-      1. Compute 20d rolling vol (annualised) and 20d momentum
-      2. CRISIS: vol > crisis_vol AND momentum < crisis_mom
-      3. CAUTIOUS: vol > crisis_vol (but momentum not as bad)
-      4. RECOVERY: within recovery_days after crisis exits
-      5. BULL: vol < 0.12 annualised AND momentum > 0 (calm uptrend)
-      6. NORMAL: everything else → match benchmark
-    """
-    if idx < lookback:
-        return 'NORMAL', bars_since_crisis
-
-    window = returns[max(0, idx - lookback):idx]
-    vol_ann = np.std(window, ddof=1) * np.sqrt(252)
-    mom_20d = np.sum(returns[max(0, idx - 20):idx])
-
-    # Crisis detection
-    if vol_ann > crisis_vol and mom_20d < crisis_mom:
-        return 'CRISIS', 0
-
-    # Cautious: vol is high but not confirmed crash
-    if vol_ann > crisis_vol:
-        return 'CAUTIOUS', bars_since_crisis + 1
-
-    # Recovery boost: just exited crisis
-    if bars_since_crisis > 0 and bars_since_crisis <= recovery_days:
-        return 'RECOVERY', bars_since_crisis + 1
-
-    # Bull: calm uptrend
-    if vol_ann < 0.12 and mom_20d > 0:
-        return 'BULL', bars_since_crisis + 1 if bars_since_crisis > 0 else 0
-
-    return 'NORMAL', bars_since_crisis + 1 if bars_since_crisis > 0 else 0
-
-
-def regime_to_exposure(regime):
-    return {
-        'CRISIS':   EXP_CRISIS,
-        'CAUTIOUS': EXP_CAUTIOUS,
-        'RECOVERY': EXP_RECOVERY,
-        'BULL':     EXP_BULL,
-        'NORMAL':   EXP_NORMAL,
-    }[regime]
+def classify_regime(returns, idx):
+    """Classify regime from 20d rolling vol and momentum."""
+    if idx < 20:
+        return 'NORMAL'
+    w = returns[max(0, idx-20):idx]
+    vol = np.std(w, ddof=1) * np.sqrt(252)
+    mom = np.sum(w)
+    if vol > 0.30 and mom < -0.08:
+        return 'CRISIS'
+    if vol > 0.22:
+        return 'CAUTIOUS'
+    if vol < 0.12 and mom > 0.01:
+        return 'BULL'
+    return 'NORMAL'
 
 
 # ──────────────────────────────────────────────────────────────
-# Backtest engine
+# Market-Maker Backtest
 # ──────────────────────────────────────────────────────────────
-def run_backtest_segment(returns, crisis_vol, crisis_mom, recovery_days):
+def run_mm_backtest(opens, highs, lows, closes, params):
     """
-    Run backtest on a segment of returns. T+1 execution delay.
-    Returns (strategy_returns, bench_returns, trade_count).
+    Market-maker on top of a base long position.
+
+    Each bar:
+      1. Base position = ~100% long (trimmed in crisis)
+      2. Compute fair value = EMA(close)
+      3. Place N limit-buy levels below fair and N limit-sell levels above
+      4. Each level that falls within [Low, High] is FILLED
+      5. Filled buys add to position, filled sells reduce → captures spread
+      6. Net overlay should be ~zero over time (buys ≈ sells)
+      7. Each fill earns maker rebate
+      8. P&L = base_position * return + spread_capture + rebates
     """
-    N = len(returns)
-    strat = np.zeros(N)
-    prev_exp = EXP_NORMAL
-    bars_since_crisis = 0
-    trade_count = 0
+    n_levels = params['n_levels']
+    step_bps = params['level_step_bps']
+    order_sz = params['order_size']
+    crisis_vol = params['crisis_vol']
+    crisis_trim = params['crisis_trim']
 
-    for i in range(N):
-        regime, bars_since_crisis = classify_regime(
-            returns, i, LOOKBACK, crisis_vol, crisis_mom, recovery_days,
-            bars_since_crisis)
+    N = len(closes)
 
-        target_exp = regime_to_exposure(regime)
+    # EMA for fair value
+    ema = np.empty(N)
+    ema[0] = closes[0]
+    a = 2.0 / (EMA_LEN + 1)
+    for i in range(1, N):
+        ema[i] = a * closes[i] + (1 - a) * ema[i-1]
 
-        # T+1: use PREVIOUS bar's exposure for today's return
-        strat[i] = returns[i] * prev_exp
+    # Returns
+    rets = np.zeros(N)
+    rets[1:] = np.diff(closes) / closes[:-1]
 
-        # Transaction costs on significant rebalance
-        if abs(target_exp - prev_exp) > 0.10:
-            cost = abs(target_exp - prev_exp) * (TX_COST_BPS + SLIPPAGE_BPS) / 10_000
-            strat[i] -= cost
-            trade_count += 1
+    daily_pnl   = np.zeros(N)
+    daily_bench  = np.zeros(N)
+    total_fills  = 0
+    total_rebate = 0.0
+    total_spread = 0.0
 
-        prev_exp = target_exp
+    # Overlay inventory from market-making (can be + or -)
+    overlay_inv = 0.0
+    max_overlay = order_sz * n_levels * 2  # max overlay position
 
-    return strat, returns.copy(), trade_count
+    for i in range(1, N):
+        # ── Regime ──
+        regime = classify_regime(rets, i)
+
+        # Base position: 100% long, trimmed slightly in crisis
+        if regime == 'CRISIS':
+            base = 1.0 - crisis_trim * 2
+            spread_mult = 2.5    # wider spreads → more profit per fill
+            size_mult = 0.6
+        elif regime == 'CAUTIOUS':
+            base = 1.0 - crisis_trim
+            spread_mult = 1.8
+            size_mult = 0.8
+        elif regime == 'BULL':
+            base = 1.0
+            spread_mult = 0.7   # tighter in calm → more fills
+            size_mult = 1.2
+        else:
+            base = 1.0
+            spread_mult = 1.0
+            size_mult = 1.0
+
+        # ── Fair value (previous bar, no lookahead) ──
+        fair = ema[i-1]
+        lo, hi = lows[i], highs[i]
+
+        # ── Place multi-level limit orders ──
+        bar_spread_pnl = 0.0
+        bar_rebate = 0.0
+        bar_fills = 0
+        sz = order_sz * size_mult
+
+        for lv in range(1, n_levels + 1):
+            offset = fair * step_bps * lv * spread_mult / 10_000
+
+            bid = fair - offset
+            ask = fair + offset
+
+            # Buy limit fills if Low <= bid
+            if lo <= bid:
+                # Bought below fair → spread capture
+                capture = sz * offset / fair
+                bar_spread_pnl += capture
+                bar_rebate += sz * MAKER_REBATE_BPS / 10_000
+                bar_spread_pnl -= sz * SEC_FEE_BPS / 10_000
+                overlay_inv += sz
+                bar_fills += 1
+
+            # Sell limit fills if High >= ask
+            if hi >= ask:
+                capture = sz * offset / fair
+                bar_spread_pnl += capture
+                bar_rebate += sz * MAKER_REBATE_BPS / 10_000
+                bar_spread_pnl -= sz * SEC_FEE_BPS / 10_000
+                overlay_inv -= sz
+                bar_fills += 1
+
+        # ── Inventory mean-reversion: gradually reduce overlay ──
+        # Decay overlay toward zero (don't accumulate directional risk)
+        overlay_inv *= 0.90  # 10% decay per bar
+
+        # Clamp overlay
+        overlay_inv = np.clip(overlay_inv, -max_overlay, max_overlay)
+
+        # ── P&L ──
+        # Base position earns the market return
+        base_pnl = base * rets[i]
+        # Overlay earns/loses on its inventory
+        overlay_pnl = overlay_inv * rets[i]
+        # Total
+        daily_pnl[i] = base_pnl + overlay_pnl + bar_spread_pnl + bar_rebate
+        daily_bench[i] = rets[i]
+
+        total_fills += bar_fills
+        total_rebate += bar_rebate
+        total_spread += bar_spread_pnl
+
+    return daily_pnl, daily_bench, total_fills, total_rebate, total_spread
 
 
-def compute_metrics(strat, bench):
-    """Compute all performance metrics from return arrays."""
-    n = len(strat)
+def compute_metrics(s, b, fills, rebate, spread_pnl):
+    n = len(s)
     if n < 60:
         return None
-
     ann = 252
-    ann_ret_s = np.mean(strat) * ann
-    ann_ret_b = np.mean(bench) * ann
-    ann_vol_s = np.std(strat, ddof=1) * np.sqrt(ann)
-    ann_vol_b = np.std(bench, ddof=1) * np.sqrt(ann)
+    ann_s = np.mean(s) * ann
+    ann_b = np.mean(b) * ann
+    vol_s = np.std(s, ddof=1) * np.sqrt(ann)
+    vol_b = np.std(b, ddof=1) * np.sqrt(ann)
+    sh_s = ann_s / vol_s if vol_s > 1e-10 else 0
+    sh_b = ann_b / vol_b if vol_b > 1e-10 else 0
 
-    sharpe_s = ann_ret_s / ann_vol_s if ann_vol_s > 1e-10 else 0.0
-    sharpe_b = ann_ret_b / ann_vol_b if ann_vol_b > 1e-10 else 0.0
-
-    # Max drawdown
-    cum_s = np.exp(np.cumsum(strat))
+    cum_s = np.exp(np.cumsum(s))
     dd_s = (np.maximum.accumulate(cum_s) - cum_s) / np.maximum.accumulate(cum_s)
-    cum_b = np.exp(np.cumsum(bench))
+    cum_b = np.exp(np.cumsum(b))
     dd_b = (np.maximum.accumulate(cum_b) - cum_b) / np.maximum.accumulate(cum_b)
 
-    # Sortino
-    down = strat[strat < 0]
-    down_vol = np.std(down, ddof=1) * np.sqrt(ann) if len(down) > 2 else ann_vol_s
-    sortino = ann_ret_s / down_vol if down_vol > 1e-10 else 0.0
-
-    alpha = ann_ret_s - ann_ret_b
-    tracking = np.std(strat - bench, ddof=1) * np.sqrt(ann)
-    info_ratio = alpha / tracking if tracking > 1e-10 else 0.0
-
-    calmar = ann_ret_s / dd_s.max() if dd_s.max() > 1e-10 else 0.0
+    down = s[s < 0]
+    dv = np.std(down, ddof=1) * np.sqrt(ann) if len(down) > 2 else vol_s
+    sortino = ann_s / dv if dv > 1e-10 else 0
+    alpha = ann_s - ann_b
+    tr = np.std(s - b, ddof=1) * np.sqrt(ann)
+    ir = alpha / tr if tr > 1e-10 else 0
+    calmar = ann_s / dd_s.max() if dd_s.max() > 1e-10 else 0
 
     return {
-        'ann_ret':      ann_ret_s,
-        'bench_ret':    ann_ret_b,
-        'alpha':        alpha,
-        'sharpe':       sharpe_s,
-        'sharpe_bench': sharpe_b,
-        'sortino':      sortino,
-        'calmar':       calmar,
-        'max_dd':       dd_s.max(),
-        'max_dd_bench': dd_b.max(),
-        'info_ratio':   info_ratio,
-        'total_ret':    np.exp(np.sum(strat)) - 1,
-        'bench_total':  np.exp(np.sum(bench)) - 1,
-        'n_bars':       n,
+        'ann_ret': ann_s, 'bench_ret': ann_b, 'alpha': alpha,
+        'sharpe': sh_s, 'sharpe_bench': sh_b,
+        'sortino': sortino, 'calmar': calmar,
+        'max_dd': dd_s.max(), 'max_dd_bench': dd_b.max(),
+        'info_ratio': ir,
+        'total_ret': np.exp(np.sum(s)) - 1,
+        'bench_total': np.exp(np.sum(b)) - 1,
+        'n_bars': n, 'total_fills': fills,
+        'fills_per_day': fills / n,
+        'rebate_ann': rebate / n * ann,
+        'spread_ann': spread_pnl / n * ann,
     }
 
 
 # ──────────────────────────────────────────────────────────────
-# Walk-forward: train thresholds in-sample, test out-of-sample
+# Walk-forward
 # ──────────────────────────────────────────────────────────────
-def walk_forward_backtest(prices):
-    """
-    Proper walk-forward:
-      1. Split into TRAIN (first 60%) and TEST (last 40%)
-      2. Grid-search thresholds on TRAIN to maximise Sharpe
-      3. Apply best thresholds to TEST (out-of-sample)
-      4. Report TEST metrics only (no forward bias)
-    """
-    returns = np.diff(np.log(prices))
-    N = len(returns)
-
+def walk_forward(o, h, l, c):
+    N = len(c)
     split = int(N * TRAIN_PCT)
     if split < MIN_TRAIN_BARS or (N - split) < MIN_TEST_BARS:
         return None
 
-    train_ret = returns[:split]
-    test_ret = returns[split:]
-
-    # ── Phase 1: Grid search on TRAINING data ──
-    keys = list(THRESHOLD_GRID.keys())
-    combos = list(product(*[THRESHOLD_GRID[k] for k in keys]))
+    keys = list(PARAM_GRID.keys())
+    combos = list(product(*[PARAM_GRID[k] for k in keys]))
 
     best_sharpe = -999
-    best_params = combos[0]
+    best_params = dict(zip(keys, combos[0]))
 
     for combo in combos:
-        crisis_vol, crisis_mom, recovery_days = combo
-        s, b, _ = run_backtest_segment(train_ret, crisis_vol, crisis_mom, recovery_days)
-        m = compute_metrics(s, b)
-        if m is None:
-            continue
-        # Optimise for Sharpe on training data (risk-adjusted, not raw return)
-        if m['sharpe'] > best_sharpe:
+        params = dict(zip(keys, combo))
+        s, b, fl, rb, sp = run_mm_backtest(o[:split], h[:split], l[:split], c[:split], params)
+        m = compute_metrics(s, b, fl, rb, sp)
+        if m and m['sharpe'] > best_sharpe:
             best_sharpe = m['sharpe']
-            best_params = combo
+            best_params = params
 
-    # ── Phase 2: Apply best params to TEST data (out-of-sample) ──
-    crisis_vol, crisis_mom, recovery_days = best_params
-    s_test, b_test, trade_count = run_backtest_segment(
-        test_ret, crisis_vol, crisis_mom, recovery_days)
-
-    metrics = compute_metrics(s_test, b_test)
-    if metrics is None:
+    # Out-of-sample test
+    s, b, fl, rb, sp = run_mm_backtest(o[split:], h[split:], l[split:], c[split:], best_params)
+    m = compute_metrics(s, b, fl, rb, sp)
+    if m is None:
         return None
-
-    metrics['crisis_vol'] = crisis_vol
-    metrics['crisis_mom'] = crisis_mom
-    metrics['recovery_days'] = recovery_days
-    metrics['trades'] = trade_count
-    metrics['train_sharpe'] = best_sharpe
-    metrics['train_bars'] = len(train_ret)
-    metrics['test_bars'] = len(test_ret)
-    metrics['strat_returns'] = s_test
-    metrics['bench_returns'] = b_test
-
-    return metrics
+    m.update(best_params)
+    m['train_sharpe'] = best_sharpe
+    m['train_bars'] = split
+    m['test_bars'] = N - split
+    m['strat_returns'] = s
+    m['bench_returns'] = b
+    return m
 
 
 # ──────────────────────────────────────────────────────────────
-# Statistical significance tests
+# Statistical tests
 # ──────────────────────────────────────────────────────────────
-def sharpe_ttest(returns):
-    """Sharpe Ratio t-test with Lo (2002) autocorrelation adjustment."""
-    n = len(returns)
-    if n < 30:
-        return {'t_stat': 0, 'p_value': 1.0, 'significant': False}
+def sharpe_ttest(r):
+    n = len(r)
+    if n < 30: return {'p_value': 1.0, 'significant': False}
+    mu = np.mean(r)*252; sig = np.std(r,ddof=1)*np.sqrt(252)
+    sr = mu/sig if sig>1e-10 else 0
+    rho = np.corrcoef(r[:-1],r[1:])[0,1]
+    eta = max(1+2*rho, 0.5)
+    se = np.sqrt(eta/n)*np.sqrt(1+0.5*sr**2)
+    t = sr/se if se>1e-10 else 0
+    p = 1-sp_stats.norm.cdf(t)
+    return {'p_value':p, 'significant':p<SIGNIFICANCE, 'sharpe':sr}
 
-    mu = np.mean(returns) * 252
-    sigma = np.std(returns, ddof=1) * np.sqrt(252)
-    sr = mu / sigma if sigma > 1e-10 else 0.0
+def block_bootstrap(r):
+    n=len(r); rng=np.random.default_rng(42)
+    nb=(n//BLOCK_SIZE)+1; off=np.arange(BLOCK_SIZE)
+    shs=np.empty(N_BOOTSTRAP)
+    for b in range(N_BOOTSTRAP):
+        st=rng.integers(0,n,size=nb)
+        ix=(st[:,None]+off[None,:]).ravel()%n
+        s=r[ix[:n]]; mu=np.mean(s)*252; sig=np.std(s,ddof=1)*np.sqrt(252)
+        shs[b]=mu/sig if sig>1e-10 else 0
+    return {'ci_lo':np.percentile(shs,2.5),'ci_hi':np.percentile(shs,97.5),
+            'p_value':np.mean(shs<=0),'significant':np.percentile(shs,2.5)>0}
 
-    rho = np.corrcoef(returns[:-1], returns[1:])[0, 1]
-    eta = max(1 + 2 * rho, 0.5)
-    se = np.sqrt(eta / n) * np.sqrt(1 + 0.5 * sr**2)
-    t_stat = sr / se if se > 1e-10 else 0.0
-    p_value = 1.0 - sp_stats.norm.cdf(t_stat)
+def perm_test(s,b):
+    obs=np.mean(s)-np.mean(b); rng=np.random.default_rng(42)
+    d=s-b; signs=rng.choice([-1.,1.],size=(N_PERMUTATIONS,len(d)))
+    pd_=(signs*d[None,:]).mean(axis=1); p=np.mean(pd_>=obs)
+    return {'alpha_ann':obs*252,'p_value':p,'significant':p<SIGNIFICANCE}
 
-    return {'t_stat': t_stat, 'p_value': p_value, 'sharpe': sr,
-            'significant': p_value < SIGNIFICANCE}
-
-
-def block_bootstrap_ci(returns, n_boot=N_BOOTSTRAP, block_size=BLOCK_SIZE):
-    """Circular block bootstrap for Sharpe ratio CI."""
-    n = len(returns)
-    rng = np.random.default_rng(42)
-    n_blocks = (n // block_size) + 1
-    offsets = np.arange(block_size)
-    sharpes = np.empty(n_boot)
-
-    for b in range(n_boot):
-        starts = rng.integers(0, n, size=n_blocks)
-        indices = (starts[:, None] + offsets[None, :]).ravel() % n
-        sample = returns[indices[:n]]
-        mu = np.mean(sample) * 252
-        sig = np.std(sample, ddof=1) * np.sqrt(252)
-        sharpes[b] = mu / sig if sig > 1e-10 else 0.0
-
-    return {
-        'ci_lo': np.percentile(sharpes, 2.5),
-        'ci_hi': np.percentile(sharpes, 97.5),
-        'p_value': np.mean(sharpes <= 0),
-        'significant': np.percentile(sharpes, 2.5) > 0,
-    }
-
-
-def permutation_test_alpha(strat_returns, bench_returns, n_perm=N_PERMUTATIONS):
-    """Permutation test: H0 = strategy has no advantage over benchmark."""
-    observed_diff = np.mean(strat_returns) - np.mean(bench_returns)
-    rng = np.random.default_rng(42)
-    diff = strat_returns - bench_returns
-    signs = rng.choice([-1.0, 1.0], size=(n_perm, len(diff)))
-    perm_diffs = (signs * diff[None, :]).mean(axis=1)
-    p_value = np.mean(perm_diffs >= observed_diff)
-
-    return {
-        'observed_alpha_ann': observed_diff * 252,
-        'p_value': p_value,
-        'significant': p_value < SIGNIFICANCE,
-    }
-
-
-def deflated_sharpe(observed_sharpe, n_trials, n_obs):
-    """Deflated Sharpe Ratio (Bailey & Lopez de Prado, 2014)."""
-    if n_trials <= 1:
-        return {'dsr': 1.0, 'significant': True}
-    e_max = np.sqrt(2 * np.log(n_trials)) * (1 - 0.5772 / np.sqrt(2 * np.log(n_trials)))
-    se = np.sqrt((1 + 0.5 * observed_sharpe**2) / n_obs)
-    if se < 1e-10:
-        return {'dsr': 0.0, 'significant': False}
-    z = (observed_sharpe - e_max) / se
-    p = sp_stats.norm.cdf(z)
-    return {'dsr': p, 'e_max': e_max, 'significant': p > 0.95}
+def deflated_sr(sr,nt,no):
+    if nt<=1: return {'dsr':1.0,'significant':True}
+    em=np.sqrt(2*np.log(nt))*(1-0.5772/np.sqrt(2*np.log(nt)))
+    se=np.sqrt((1+0.5*sr**2)/no)
+    if se<1e-10: return {'dsr':0,'significant':False}
+    z=(sr-em)/se; p=sp_stats.norm.cdf(z)
+    return {'dsr':p,'significant':p>0.95}
 
 
 # ──────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────
 def main():
-    print('=' * 80)
-    print('  WALK-FORWARD MULTI-ASSET REGIME DETECTION BACKTEST')
-    print('  Thresholds trained in-sample, tested out-of-sample (no forward bias)')
-    print('=' * 80)
+    print('='*85)
+    print('  MARKET-MAKER REGIME BACKTEST (Base Long + Limit-Order Overlay)')
+    print('  Limit orders only | Maker rebates | Multi-level OHLC fills')
+    print('  Walk-forward: 60% train / 40% test')
+    print('='*85)
 
-    # ── Download data ─────────────────────────────────────────
-    print(f'\nDownloading {len(ASSETS)} assets ...')
-    asset_data = {}
-    for ticker in ASSETS:
+    print(f'\nDownloading {len(ASSETS)} assets (OHLC) ...')
+    data = {}
+    for t in ASSETS:
         try:
-            df = yf.download(ticker, period='max', interval='1d', progress=False)
-            prices = df['Close'].dropna().values.flatten()
-            if len(prices) > MIN_TRAIN_BARS + MIN_TEST_BARS:
-                asset_data[ticker] = prices
-                n_yrs = len(prices) / 252
-                print(f'  {ticker}: {len(prices):>6} bars ({n_yrs:.1f}y)')
-            else:
-                print(f'  {ticker}: SKIPPED ({len(prices)} bars)')
+            df = yf.download(t, period='max', interval='1d', progress=False)
+            if len(df) < MIN_TRAIN_BARS+MIN_TEST_BARS:
+                print(f'  {t}: SKIP ({len(df)} bars)'); continue
+            o=df['Open'].values.flatten(); h=df['High'].values.flatten()
+            l=df['Low'].values.flatten(); c=df['Close'].values.flatten()
+            m=~(np.isnan(o)|np.isnan(h)|np.isnan(l)|np.isnan(c))
+            data[t]=(o[m],h[m],l[m],c[m])
+            print(f'  {t}: {m.sum():>6} bars ({m.sum()/252:.1f}y)')
         except Exception as e:
-            print(f'  {ticker}: ERROR ({e})')
+            print(f'  {t}: ERROR ({e})')
 
-    if not asset_data:
-        sys.exit('No assets loaded.')
+    if not data: sys.exit('No data.')
 
-    n_thresh = len(list(product(*THRESHOLD_GRID.values())))
-    print(f'\nThreshold grid: {n_thresh} combos searched per asset (in-sample)')
-    print(f'Walk-forward: {TRAIN_PCT*100:.0f}% train / {(1-TRAIN_PCT)*100:.0f}% test')
+    nc = len(list(product(*PARAM_GRID.values())))
+    print(f'\nGrid: {nc} combos | Maker rebate +{MAKER_REBATE_BPS} bps | Multi-level limits')
 
-    # ── Run walk-forward backtests ────────────────────────────
-    results = []
-    t0 = time.time()
+    results = []; t0 = time.time()
 
-    for ticker, prices in asset_data.items():
-        print(f'\n  Running {ticker} ...', end=' ', flush=True)
-        wf = walk_forward_backtest(prices)
-        if wf is None:
-            print('SKIPPED (not enough data)')
-            continue
+    for tk,(o,h,l,c) in data.items():
+        print(f'\n  {tk} ...', end=' ', flush=True)
+        wf = walk_forward(o,h,l,c)
+        if wf is None: print('SKIP'); continue
 
-        s_ret = wf.pop('strat_returns')
-        b_ret = wf.pop('bench_returns')
+        sr = wf.pop('strat_returns'); br = wf.pop('bench_returns')
+        st1=sharpe_ttest(sr); st2=block_bootstrap(sr)
+        st3=perm_test(sr,br); st4=deflated_sr(wf['sharpe'],nc,wf['test_bars'])
 
-        # Statistical tests on OUT-OF-SAMPLE returns only
-        sr_test   = sharpe_ttest(s_ret)
-        boot_test = block_bootstrap_ci(s_ret)
-        perm_test = permutation_test_alpha(s_ret, b_ret)
-        dsr_test  = deflated_sharpe(wf['sharpe'], n_thresh, wf['test_bars'])
-
-        row = {'asset': ticker, **wf}
-        row['sr_pval']    = sr_test['p_value']
-        row['sr_sig']     = sr_test['significant']
-        row['boot_ci_lo'] = boot_test['ci_lo']
-        row['boot_ci_hi'] = boot_test['ci_hi']
-        row['boot_pval']  = boot_test['p_value']
-        row['boot_sig']   = boot_test['significant']
-        row['perm_pval']  = perm_test['p_value']
-        row['perm_sig']   = perm_test['significant']
-        row['perm_alpha'] = perm_test['observed_alpha_ann']
-        row['dsr']        = dsr_test['dsr']
-        row['dsr_sig']    = dsr_test['significant']
-        row['e_max_sr']   = dsr_test.get('e_max', 0)
-
+        row={'asset':tk,**wf}
+        row['sr_pval']=st1['p_value']; row['sr_sig']=st1['significant']
+        row['boot_ci_lo']=st2['ci_lo']; row['boot_ci_hi']=st2['ci_hi']
+        row['boot_pval']=st2['p_value']; row['boot_sig']=st2['significant']
+        row['perm_pval']=st3['p_value']; row['perm_sig']=st3['significant']
+        row['dsr']=st4['dsr']; row['dsr_sig']=st4['significant']
         results.append(row)
 
-        sig = sum([sr_test['significant'], boot_test['significant'],
-                   perm_test['significant'], dsr_test['significant']])
-        flag = f'  [{sig}/4 tests sig]'
+        ns=sum([st1['significant'],st2['significant'],st3['significant'],st4['significant']])
         print(f'Alpha={wf["alpha"]*100:+.2f}%  Sharpe={wf["sharpe"]:.3f}  '
-              f'MaxDD={wf["max_dd"]*100:.1f}%  Trades={wf["trades"]}{flag}')
+              f'Fill/d={wf["fills_per_day"]:.1f}  Spread={wf["spread_ann"]*100:.2f}%  '
+              f'Rebate={wf["rebate_ann"]*100:.3f}%  DD={wf["max_dd"]*100:.1f}%  [{ns}/4 sig]')
 
-    if not results:
-        sys.exit('No valid results.')
-
+    if not results: sys.exit('No results.')
     df = pd.DataFrame(results)
 
-    # ── Save ──────────────────────────────────────────────────
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    csv_path = OUT_DIR / 'rolling_backtest_results.csv'
-    df.to_csv(csv_path, index=False, float_format='%.6f')
-    print(f'\nResults saved to {csv_path}')
+    csv = OUT_DIR / 'rolling_backtest_results.csv'
+    df.to_csv(csv, index=False, float_format='%.6f')
 
-    # ── Summary ───────────────────────────────────────────────
-    print('\n' + '=' * 90)
-    print('  OUT-OF-SAMPLE RESULTS  (thresholds trained on first 60%, tested on last 40%)')
-    print('=' * 90)
+    print('\n'+'='*105)
+    print('  OUT-OF-SAMPLE RESULTS — Market-Maker (Base Long + Overlay)')
+    print('='*105)
 
-    print(f'\n{"Asset":<6} {"Alpha":>7} {"Sharpe":>7} {"S.Bench":>7} '
-          f'{"Sortino":>8} {"MaxDD":>6} {"DD.Bnch":>7} {"Trades":>6} '
-          f'{"SR-p":>6} {"Boot-p":>7} {"Perm-p":>7} {"DSR":>5} '
-          f'{"crVol":>6} {"crMom":>7} {"recDays":>7}')
-    print('-' * 115)
+    print(f'\n{"Asset":<6} {"Alpha":>7} {"Sharpe":>7} {"S.Bn":>6} '
+          f'{"Sortino":>8} {"MaxDD":>6} {"DD.Bn":>6} '
+          f'{"Fil/d":>5} {"Spread":>7} {"Rebate":>7} '
+          f'{"SR-p":>6} {"Bt-p":>6} {"Pm-p":>6} {"DSR":>5} '
+          f'{"lvl":>4} {"stp":>4} {"sz":>5} {"crV":>5} {"trm":>5}')
+    print('-'*125)
 
-    pos_alpha = 0
-    sig_count = 0
-    for _, r in df.sort_values('alpha', ascending=False).iterrows():
-        n_sig = sum([r['sr_sig'], r['boot_sig'], r['perm_sig'], r['dsr_sig']])
-        mark = '**' if n_sig >= 3 else ('*' if n_sig >= 2 else '')
-        if r['alpha'] > 0:
-            pos_alpha += 1
-        if n_sig >= 2:
-            sig_count += 1
+    pa=0; sc=0
+    for _,r in df.sort_values('alpha',ascending=False).iterrows():
+        ns=sum([r['sr_sig'],r['boot_sig'],r['perm_sig'],r['dsr_sig']])
+        mk='**' if ns>=3 else ('*' if ns>=2 else '')
+        if r['alpha']>0: pa+=1
+        if ns>=2: sc+=1
         print(f'{r["asset"]:<6} {r["alpha"]*100:>+6.2f}% {r["sharpe"]:>7.3f} '
-              f'{r["sharpe_bench"]:>7.3f} {r["sortino"]:>8.3f} '
-              f'{r["max_dd"]*100:>5.1f}% {r["max_dd_bench"]*100:>6.1f}% '
-              f'{r["trades"]:>6.0f} '
-              f'{r["sr_pval"]:>6.3f} {r["boot_pval"]:>7.3f} {r["perm_pval"]:>7.3f} '
+              f'{r["sharpe_bench"]:>6.3f} {r["sortino"]:>8.3f} '
+              f'{r["max_dd"]*100:>5.1f}% {r["max_dd_bench"]*100:>5.1f}% '
+              f'{r["fills_per_day"]:>5.1f} {r["spread_ann"]*100:>6.2f}% '
+              f'{r["rebate_ann"]*100:>6.3f}% '
+              f'{r["sr_pval"]:>6.3f} {r["boot_pval"]:>6.3f} {r["perm_pval"]:>6.3f} '
               f'{r["dsr"]:>5.2f} '
-              f'{r["crisis_vol"]:>6.2f} {r["crisis_mom"]:>7.2f} '
-              f'{r["recovery_days"]:>7.0f} {mark}')
+              f'{r["n_levels"]:>4} {r["level_step_bps"]:>4} '
+              f'{r["order_size"]:>5.2f} {r["crisis_vol"]:>5.2f} '
+              f'{r["crisis_trim"]:>5.2f} {mk}')
 
     print(f'\n── Summary ──')
-    print(f'  Assets with positive alpha:           {pos_alpha}/{len(df)}')
-    print(f'  Assets passing >=2 significance tests: {sig_count}/{len(df)}')
-    print(f'  Mean alpha:  {df["alpha"].mean()*100:+.2f}%')
-    print(f'  Mean Sharpe: {df["sharpe"].mean():.3f} (bench: {df["sharpe_bench"].mean():.3f})')
-    print(f'  Mean MaxDD:  {df["max_dd"].mean()*100:.1f}% (bench: {df["max_dd_bench"].mean()*100:.1f}%)')
+    print(f'  Positive alpha:  {pa}/{len(df)}')
+    print(f'  Significant:     {sc}/{len(df)}  (>=2 of 4 tests)')
+    print(f'  Mean alpha:      {df["alpha"].mean()*100:+.2f}%')
+    print(f'  Mean Sharpe:     {df["sharpe"].mean():.3f}  (bench: {df["sharpe_bench"].mean():.3f})')
+    print(f'  Mean MaxDD:      {df["max_dd"].mean()*100:.1f}%  (bench: {df["max_dd_bench"].mean()*100:.1f}%)')
+    print(f'  Mean fills/day:  {df["fills_per_day"].mean():.1f}')
+    print(f'  Mean spread/yr:  {df["spread_ann"].mean()*100:.2f}%')
+    print(f'  Mean rebate/yr:  {df["rebate_ann"].mean()*100:.3f}%')
+    dd = df['max_dd_bench'].mean()-df['max_dd'].mean()
+    print(f'  DD improvement:  {dd*100:+.1f}%')
+    print(f'\n  Time: {time.time()-t0:.1f}s | CSV: {csv}')
 
-    # Drawdown improvement is key value prop
-    dd_improvement = df['max_dd_bench'].mean() - df['max_dd'].mean()
-    print(f'  Drawdown improvement: {dd_improvement*100:+.1f}% avg across assets')
 
-    print(f'\n  Run time: {time.time() - t0:.1f}s')
-    print(f'  CSV: {csv_path}')
-
-
-if __name__ == '__main__':
+if __name__=='__main__':
     main()
