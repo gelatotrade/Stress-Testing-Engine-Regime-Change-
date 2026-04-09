@@ -379,7 +379,7 @@ def main():
     nc = len(list(product(*PARAM_GRID.values())))
     print(f'\nGrid: {nc} combos | Maker rebate +{MAKER_REBATE_BPS} bps | Multi-level limits')
 
-    results = []; t0 = time.time()
+    results = []; curves = {}; t0 = time.time()
 
     for tk,(o,h,l,c) in data.items():
         print(f'\n  {tk} ...', end=' ', flush=True)
@@ -387,6 +387,7 @@ def main():
         if wf is None: print('SKIP'); continue
 
         sr = wf.pop('strat_returns'); br = wf.pop('bench_returns')
+        curves[tk] = (sr.copy(), br.copy())
         st1=sharpe_ttest(sr); st2=block_bootstrap(sr)
         st3=perm_test(sr,br); st4=deflated_sr(wf['sharpe'],nc,wf['test_bars'])
 
@@ -454,6 +455,133 @@ def main():
     dd = df['max_dd_bench'].mean()-df['max_dd'].mean()
     print(f'  DD improvement:  {dd*100:+.1f}%')
     print(f'\n  Time: {time.time()-t0:.1f}s | CSV: {csv}')
+
+    # ── Generate equity curve chart ──
+    plot_equity_curves(df, curves)
+
+
+def plot_equity_curves(df, curves):
+    """Generate a multi-panel equity curve chart for top assets."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from matplotlib.gridspec import GridSpec
+    except ImportError:
+        print('\n  matplotlib not available, skipping chart.')
+        return
+
+    # Sort by alpha, take top 6
+    top = df.sort_values('alpha', ascending=False).head(6)
+    n = len(top)
+    if n == 0:
+        return
+
+    fig = plt.figure(figsize=(18, 14), facecolor='#0a0a1a')
+    gs = GridSpec(3, 2, hspace=0.35, wspace=0.25,
+                  left=0.06, right=0.97, top=0.93, bottom=0.05)
+
+    fig.suptitle('Market-Maker Regime Backtest — Out-of-Sample Equity Curves',
+                 fontsize=16, fontweight='bold', color='white', y=0.97)
+
+    colors_s = ['#00ff88', '#00ccff', '#ff6644', '#ffaa00', '#cc66ff', '#66ffcc']
+    color_b = '#555588'
+
+    for i, (_, row) in enumerate(top.iterrows()):
+        tk = row['asset']
+        if tk not in curves:
+            continue
+        sr, br = curves[tk]
+        ax = fig.add_subplot(gs[i // 2, i % 2])
+        ax.set_facecolor('#0d0d22')
+
+        cum_s = np.exp(np.cumsum(sr)) - 1
+        cum_b = np.exp(np.cumsum(br)) - 1
+        days = np.arange(len(sr)) / 252
+
+        ax.plot(days, cum_b * 100, color=color_b, linewidth=1.2,
+                alpha=0.7, label=f'Benchmark')
+        ax.plot(days, cum_s * 100, color=colors_s[i], linewidth=1.5,
+                label=f'Strategy')
+
+        # Alpha fill
+        ax.fill_between(days, cum_b * 100, cum_s * 100,
+                         where=cum_s > cum_b, alpha=0.15, color=colors_s[i])
+        ax.fill_between(days, cum_b * 100, cum_s * 100,
+                         where=cum_s <= cum_b, alpha=0.10, color='#ff3333')
+
+        ns = sum([row['sr_sig'], row['boot_sig'], row['perm_sig'], row['dsr_sig']])
+        sig_str = f'{ns}/4 sig' if ns >= 2 else f'{ns}/4'
+        ax.set_title(
+            f'{tk}  |  Alpha={row["alpha"]*100:+.1f}%  Sharpe={row["sharpe"]:.2f}  '
+            f'Calmar={row["calmar"]:.2f}  [{sig_str}]',
+            fontsize=10, color='white', fontweight='bold')
+
+        ax.set_xlabel('Years (OOS)', fontsize=8, color='#888888')
+        ax.set_ylabel('Cumulative Return (%)', fontsize=8, color='#888888')
+        ax.legend(fontsize=8, loc='upper left', framealpha=0.3,
+                  facecolor='#1a1a2e', edgecolor='#333355', labelcolor='white')
+        ax.tick_params(colors='#888888', labelsize=7)
+        for spine in ax.spines.values():
+            spine.set_color('#333355')
+        ax.grid(True, alpha=0.15, color='#444466')
+
+    img_dir = OUT_DIR.parent / 'docs' / 'img'
+    img_dir.mkdir(parents=True, exist_ok=True)
+    out = img_dir / 'backtest_equity_curves.png'
+    fig.savefig(out, dpi=150, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    print(f'\n  Equity curve chart: {out}')
+
+    # ── Summary bar chart: alpha + Calmar across all assets ──
+    fig2, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), facecolor='#0a0a1a')
+
+    assets = df.sort_values('alpha', ascending=True)['asset'].values
+    alphas = df.sort_values('alpha', ascending=True)['alpha'].values * 100
+    calmars = df.set_index('asset').loc[assets, 'calmar'].values
+    calmar_b = df.set_index('asset').loc[assets, 'calmar_bench'].values
+
+    bar_colors = ['#00ff88' if a > 0 else '#ff4444' for a in alphas]
+
+    # Alpha bar
+    ax1.set_facecolor('#0d0d22')
+    ax1.barh(assets, alphas, color=bar_colors, height=0.6, alpha=0.85)
+    ax1.axvline(0, color='white', linewidth=0.8, alpha=0.5)
+    ax1.set_title('Out-of-Sample Alpha (% p.a.)', fontsize=12,
+                  color='white', fontweight='bold')
+    ax1.set_xlabel('Alpha (%)', fontsize=9, color='#888888')
+    ax1.tick_params(colors='#888888', labelsize=9)
+    for spine in ax1.spines.values():
+        spine.set_color('#333355')
+    ax1.grid(True, axis='x', alpha=0.15, color='#444466')
+    for j, v in enumerate(alphas):
+        ax1.text(v + (0.3 if v >= 0 else -0.3), j,
+                 f'{v:+.1f}%', va='center', fontsize=8,
+                 color='white', ha='left' if v >= 0 else 'right')
+
+    # Calmar bar
+    ax2.set_facecolor('#0d0d22')
+    ax2.barh(assets, calmars, height=0.6, alpha=0.85, color='#00ccff',
+             label='Strategy')
+    ax2.barh(assets, calmar_b, height=0.3, alpha=0.5, color='#666699',
+             label='Benchmark')
+    ax2.set_title('Calmar Ratio (Return / MaxDD)', fontsize=12,
+                  color='white', fontweight='bold')
+    ax2.set_xlabel('Calmar Ratio', fontsize=9, color='#888888')
+    ax2.tick_params(colors='#888888', labelsize=9)
+    ax2.legend(fontsize=9, loc='lower right', framealpha=0.3,
+               facecolor='#1a1a2e', edgecolor='#333355', labelcolor='white')
+    for spine in ax2.spines.values():
+        spine.set_color('#333355')
+    ax2.grid(True, axis='x', alpha=0.15, color='#444466')
+
+    fig2.suptitle('Market-Maker Backtest — Alpha & Calmar Summary',
+                  fontsize=14, fontweight='bold', color='white', y=0.98)
+    fig2.tight_layout(rect=[0, 0, 1, 0.94])
+    out2 = img_dir / 'backtest_summary.png'
+    fig2.savefig(out2, dpi=150, facecolor=fig2.get_facecolor())
+    plt.close(fig2)
+    print(f'  Summary chart: {out2}')
 
 
 if __name__=='__main__':

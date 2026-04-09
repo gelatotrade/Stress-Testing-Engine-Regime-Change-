@@ -112,7 +112,7 @@ The **side-by-side dashboard** uses **real S&P 500 market data** from yfinance w
 ![Combined Dashboard Minute](docs/img/combined_dashboard_minute.gif)
 
 **Left panel (Real S&P 500 Data):**
-- **White line**: Strategy portfolio cumulative return (adaptive exposure: 15% in BEAR VOLATILE → 110% in BULL QUIET)
+- **White line**: Strategy portfolio cumulative return (market-maker overlay: ~100% base long + limit-order spread capture, regime-adjusted)
 - **Blue line**: S&P 500 benchmark cumulative return (buy-and-hold)
 - **X-axis**: Real calendar dates from yfinance (gap-filtered for hourly/minute data)
 - **Green/red fill**: Alpha areas where strategy outperforms/underperforms benchmark
@@ -133,7 +133,7 @@ The **side-by-side dashboard** uses **real S&P 500 market data** from yfinance w
 | Hourly | ^GSPC | 60 days | 1h | ~411 | `%b %d %H:%M` (e.g., "Jan 07 14:30") |
 | Minute | ^GSPC | 5 days | 1m | ~1948 | `%b %d %H:%M` (e.g., "Mar 28 09:35") |
 
-**How they connect:** The regime is computed from a rolling window of actual S&P 500 returns. The 3D surface uses the **same shapes and colormaps** as the first two visualizations — when real market returns turn negative with high volatility, the regime shifts to **BEAR VOLATILE** and the surface inverts into the same deep-blue → red → gold crater you see in the regime cycle animations above. When returns recover, the surface morphs into the same purple → cyan → mint upward slope. The strategy's adaptive exposure (15% in BEAR VOLATILE, 110% in BULL QUIET) generates alpha shown as the white line above the blue benchmark.
+**How they connect:** The regime is computed from a rolling window of actual S&P 500 returns. The 3D surface uses the **same shapes and colormaps** as the first two visualizations — when real market returns turn negative with high volatility, the regime shifts to **BEAR VOLATILE** and the surface inverts into the same deep-blue → red → gold crater you see in the regime cycle animations above. When returns recover, the surface morphs into the same purple → cyan → mint upward slope. The market-maker overlay captures spread via limit orders (wider in crisis, tighter in bull), generating alpha shown as the white line above the blue benchmark.
 
 ---
 
@@ -426,13 +426,13 @@ python3 scripts/gen_combined_dashboard.py        # 3 GIFs: combined_dashboard_{d
 
 ## Regime-Strategy Mapping
 
-| Regime | 3D Surface | Recommended Strategies | Exposure | Execution Action |
-|--------|-----------|----------------------|----------|-----------------|
-| **BULL QUIET** | Smooth elevated dome (blue → green) | Covered Call, Iron Condor, Bull Call Spread | 110% | BUY equity, collect premium |
-| **BULL VOLATILE** | Steep peaks with ripples | Collar, Straddle, Covered Call | 80% | Reduce size, add hedges |
-| **TRANSITION** | Rippled surface (purple → amber) | Straddle, Strangle, Collar | 40% | Hold, tighten stops |
-| **BEAR VOLATILE** | **Inverted crater (deep-blue → red → gold)** | **Protective Put, Collar (CRISIS)** | **15%** | **SELL to cash, full hedge** |
-| **RECOVERY** | Reforming upward slope (purple → cyan) | Bull Call Spread, Covered Call | 80% | BUY equity incrementally |
+| Regime | 3D Surface | Base Position | Spread Width | Overlay Size | MM Action |
+|--------|-----------|--------------|-------------|-------------|-----------|
+| **BULL QUIET** | Smooth elevated dome (blue → green) | 102% (slight lever) | Tight (0.7x) | 1.2x | Max fills, tight spreads |
+| **NORMAL** | Moderate surface | 100% | Normal (1.0x) | 1.0x | Standard market-making |
+| **CAUTIOUS** | Flattening surface | 90% (trimmed) | Wide (2.0x) | 0.7x | Wider spreads, smaller size |
+| **CRISIS** | **Inverted crater (deep-blue → red → gold)** | **80% (double trim)** | **Very wide (3.0x)** | **0.5x** | **Max spread capture, min risk** |
+| **RECOVERY** | Reforming upward slope (purple → cyan) | 103% (overweight) | Medium (1.4x) | 1.2x | Capture recovery volatility |
 
 ---
 
@@ -497,6 +497,18 @@ python3 scripts/rolling_backtest.py
 | Block Bootstrap | Is Sharpe CI above 0? | 5,000 circular block resamples |
 | Permutation test | Strategy > buy-and-hold? | 5,000 random sign-flip reassignments |
 | Deflated Sharpe | Survives multiple testing? | Bailey & Lopez de Prado (2014) |
+
+### Out-of-Sample Equity Curves (Top 6 Assets)
+
+![Backtest Equity Curves](docs/img/backtest_equity_curves.png)
+
+> Strategy (colored) vs. benchmark (grey) cumulative returns over the out-of-sample period. Green fill = alpha, red fill = underperformance. All 6 shown assets have 3/4 or 2/4 significance tests passing.
+
+### Alpha & Calmar Summary
+
+![Backtest Summary](docs/img/backtest_summary.png)
+
+> Left: Out-of-sample alpha (% p.a.) — 9/10 assets positive. Right: Calmar ratio (return/MaxDD) — strategy beats benchmark on 8/10 assets.
 
 ### Out-of-Sample Results
 
