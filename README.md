@@ -484,9 +484,11 @@ python3 scripts/rolling_backtest.py
 - **Assets**: SPY, QQQ, IWM, EFA, EEM, GLD, TLT, DIA, VGK, ACWI
 - **Period**: Maximum available from yfinance (up to 33 years for SPY)
 - **Walk-forward**: 60% train / 40% test, no forward bias
-- **Parameter grid**: 48 combinations of `(n_levels, level_step_bps, order_size, crisis_vol, crisis_trim)`
+- **Parameter grid**: 108 combinations of `(n_levels, level_step_bps, order_size, crisis_vol, crisis_trim)`
 - **Fill model**: OHLC-based — limit buy fills if `Low <= bid`, limit sell fills if `High >= ask`
+- **Adverse selection**: 45% discount on theoretical spread capture (realistic for OHLC simulation)
 - **Fees**: Maker rebate +0.20 bps, SEC fee -0.02 bps per fill (no taker fees)
+- **Regime detection**: 5 states — CRISIS, CAUTIOUS, RECOVERY, BULL, NORMAL (based on 20d rolling vol, momentum, vol trend)
 - **4 statistical tests** per asset:
 
 | Test | What it checks | Method |
@@ -498,31 +500,33 @@ python3 scripts/rolling_backtest.py
 
 ### Out-of-Sample Results
 
-| Asset | Alpha | Sharpe | S.Bench | Sortino | MaxDD | Fills/Day | Spread/yr | Sig |
-|-------|-------|--------|---------|---------|-------|-----------|-----------|-----|
-| **SPY** | **+6.11%** | 1.081 | 0.866 | 1.118 | 37.4% | 5.8 | 16.80% | **3/4** |
-| **DIA** | **+6.01%** | 0.908 | 0.698 | 0.934 | 40.4% | 5.7 | 16.73% | **3/4** |
-| **IWM** | **+5.27%** | 0.671 | 0.490 | 0.755 | 45.0% | 6.0 | 19.88% | **3/4** |
-| **QQQ** | +3.91% | 0.932 | 0.848 | 0.999 | 28.3% | 5.9 | 19.04% | 2/4 |
-| TLT | +3.05% | 0.153 | -0.039 | 0.198 | 43.7% | 5.4 | 15.92% | 1/4 |
-| **ACWI** | **+2.40%** | 0.762 | 0.736 | 0.780 | 36.9% | 5.6 | 16.72% | **2/4** |
-| **GLD** | **+1.45%** | 1.149 | 0.967 | 1.388 | 19.3% | 5.4 | 16.10% | **2/4** |
-| EFA | +1.11% | 0.570 | 0.572 | 0.585 | 38.8% | 5.3 | 15.75% | 1/4 |
-| EEM | -0.49% | 0.408 | 0.442 | 0.488 | 36.4% | 5.4 | 10.26% | 1/4 |
-| VGK | -1.10% | 0.384 | 0.489 | 0.398 | 41.6% | 5.4 | 16.57% | 1/4 |
+| Asset | Alpha | Sharpe | S.Bench | Sortino | Calmar | C.Bench | MaxDD | Fills/Day | Spread/yr | Sig |
+|-------|-------|--------|---------|---------|--------|---------|-------|-----------|-----------|-----|
+| **SPY** | **+8.84%** | 1.213 | 0.882 | 1.237 | **0.634** | 0.469 | 37.4% | 7.2 | 22.32% | **3/4** |
+| **IWM** | **+7.76%** | 0.769 | 0.504 | 0.862 | **0.427** | 0.297 | 45.3% | 7.6 | 26.37% | **3/4** |
+| **DIA** | **+7.73%** | 0.986 | 0.706 | 1.002 | **0.486** | 0.355 | 41.1% | 7.0 | 21.89% | **3/4** |
+| **QQQ** | **+7.49%** | 1.072 | 0.863 | 1.146 | **0.902** | 0.592 | 29.5% | 7.4 | 25.88% | **3/4** |
+| **ACWI** | **+5.33%** | 0.896 | 0.748 | 0.910 | **0.516** | 0.439 | 37.3% | 7.1 | 22.80% | **3/4** |
+| **TLT** | +4.36% | 0.230 | -0.040 | 0.299 | 0.092 | -0.013 | 40.9% | 6.6 | 20.11% | **2/4** |
+| **EFA** | +2.62% | 0.649 | 0.585 | 0.663 | 0.331 | 0.313 | 38.4% | 6.6 | 20.65% | **2/4** |
+| **GLD** | +1.88% | 1.142 | 0.977 | 1.341 | **0.884** | 0.776 | 20.2% | 6.6 | 20.11% | **2/4** |
+| VGK | +0.56% | 0.470 | 0.508 | 0.485 | 0.249 | 0.281 | 41.9% | 6.8 | 22.06% | 1/4 |
+| EEM | -0.17% | 0.401 | 0.459 | 0.442 | 0.249 | 0.249 | 37.0% | 6.8 | 22.32% | 1/4 |
 
 ### Summary Statistics
 
-| Metric | Value |
-|--------|-------|
-| **Positive alpha** | **8 / 10 assets** |
-| **Statistically significant** | **6 / 10 assets** (>=2 of 4 tests) |
-| **Mean alpha** | **+2.77%** |
-| **Mean Sharpe** | 0.702 (bench: 0.607) |
-| **Mean Sortino** | 0.764 |
-| **Mean fills/day** | 5.6 |
-| **Mean spread/yr** | 16.38% |
-| **Mean rebate/yr** | 0.137% |
+| Metric | Strategy | Benchmark | Improvement |
+|--------|----------|-----------|-------------|
+| **Positive alpha** | **9 / 10 assets** | — | — |
+| **Statistically significant** | **8 / 10 assets** (>=2 of 4 tests) | — | — |
+| **Mean alpha** | **+4.64%** | — | — |
+| **Mean Sharpe** | **0.783** | 0.619 | +26% |
+| **Mean Sortino** | **0.839** | — | — |
+| **Mean Calmar** | **0.477** | 0.376 | +27% |
+| **Mean MaxDD** | 36.9% | 34.0% | — |
+| **Mean fills/day** | 7.0 | — | — |
+| **Mean spread/yr** | 22.45% | — | — |
+| **Mean rebate/yr** | 0.181% | — | — |
 
 ### Optimal Parameters (Walk-Forward Selected)
 
@@ -530,23 +534,24 @@ The walk-forward optimizer consistently converged on the same parameters across 
 
 | Parameter | Value | Meaning |
 |-----------|-------|---------|
-| `n_levels` | 5 | 5 limit-buy + 5 limit-sell levels per bar |
-| `level_step_bps` | 8 | 8 basis points between each level |
+| `n_levels` | 7 | 7 limit-buy + 7 limit-sell levels per bar |
+| `level_step_bps` | 12 | 12 basis points between each level |
 | `order_size` | 0.05 | 5% of capital per level |
-| `crisis_vol` | 0.22 | Annualised vol threshold for crisis regime |
+| `crisis_vol` | 0.18 | Annualised vol threshold for crisis regime |
 | `crisis_trim` | 0.10 | Trim base position by 10% in crisis (20% in severe crisis) |
 
 ### Key Findings
 
-- **Sharpe t-test**: Significant for **all 10/10 assets** — every asset shows positive risk-adjusted returns
-- **Block Bootstrap**: Significant for **6/10** — SPY, QQQ, IWM, DIA, GLD, ACWI have Sharpe CIs above zero
-- **Permutation test**: Significant for **3/10** — SPY, DIA, IWM beat buy-and-hold with p < 0.05
-- **Top 3 performers**: SPY (+6.11%), DIA (+6.01%), IWM (+5.27%) — all with 3/4 significance tests passing
-- **Alpha source breakdown**: ~95% from spread capture, ~5% from maker rebates — the multi-level limit overlay generates consistent income on top of the base long position
+- **Sharpe t-test**: Significant for **9/10 assets** — positive risk-adjusted returns
+- **Block Bootstrap**: Significant for **7/10** — SPY, QQQ, IWM, DIA, GLD, ACWI, EFA have Sharpe CIs above zero
+- **Permutation test**: Significant for **5/10** — SPY, DIA, IWM, QQQ, ACWI beat buy-and-hold with p < 0.05
+- **Top 4 performers**: SPY (+8.84%), IWM (+7.76%), DIA (+7.73%), QQQ (+7.49%) — all with 3/4 significance tests passing
+- **Calmar ratio**: Strategy Calmar (0.477) beats benchmark (0.376) by 27% — better return per unit of drawdown
+- **Alpha source**: ~99% from spread capture (22.45%/yr), ~1% from maker rebates — regime-controlled limit orders generate consistent income
 
 ### Interpretation
 
-> The market-maker regime strategy produces **statistically significant positive alpha** across 8/10 assets (mean +2.77%). Unlike traditional timing strategies that sacrifice returns for risk reduction, this strategy maintains a **100% base long position** (capturing the equity premium) and generates **additional alpha from limit-order spread capture**. The regime detector controls spread width and order sizing — wider spreads in crisis (more profit per fill), tighter spreads in bull (more fills). The walk-forward optimizer converges on consistent parameters across all assets, suggesting genuine market microstructure alpha rather than overfitting.
+> The market-maker regime strategy produces **statistically significant positive alpha** across 9/10 assets (mean +4.64%). The strategy maintains a **~100% base long position** (capturing the equity premium) and generates **additional alpha from limit-order spread capture** with a 45% adverse selection discount for realistic fill modeling. The 5-state regime detector (CRISIS, CAUTIOUS, RECOVERY, BULL, NORMAL) controls spread width, order sizing, and base position trim. In crisis: spreads widen 3x (more profit per fill), base trims 20%. In bull: spreads tighten (more fills), base boosts to 102%. The walk-forward optimizer converges on consistent parameters (7 levels, 12 bps, 5% size) across all assets, and 8/10 pass multiple significance tests — suggesting genuine market microstructure alpha rather than overfitting.
 
 ---
 

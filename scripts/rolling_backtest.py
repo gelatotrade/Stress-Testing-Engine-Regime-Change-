@@ -42,6 +42,7 @@ except ImportError:
 # ── Fee structure (NYSE/NASDAQ typical) ──
 MAKER_REBATE_BPS = 0.20
 SEC_FEE_BPS      = 0.02
+ADVERSE_SEL      = 0.45    # 45% of theoretical spread lost to adverse selection
 
 # ── Assets ──
 ASSETS = ['SPY', 'QQQ', 'IWM', 'EFA', 'EEM', 'GLD', 'TLT', 'DIA', 'VGK', 'ACWI']
@@ -54,11 +55,11 @@ EMA_LEN        = 10
 
 # ── Parameter grid (walk-forward searched) ──
 PARAM_GRID = {
-    'n_levels':       [3, 5],          # limit levels per side
-    'level_step_bps': [3, 5, 8],       # bps between levels
-    'order_size':     [0.03, 0.05],    # per-level order as fraction of capital
-    'crisis_vol':     [0.22, 0.28],    # annualised vol for crisis
-    'crisis_trim':    [0.05, 0.10],    # how much to trim base in crisis
+    'n_levels':       [3, 5, 7],       # limit levels per side
+    'level_step_bps': [5, 8, 12],      # bps between levels
+    'order_size':     [0.02, 0.03, 0.05], # per-level order as fraction of capital
+    'crisis_vol':     [0.18, 0.22],    # annualised vol for crisis detection
+    'crisis_trim':    [0.10, 0.15],    # crisis avoidance trim
 }
 
 # ── Stats ──
@@ -74,16 +75,22 @@ OUT_DIR = Path(__file__).resolve().parent.parent / 'results'
 # Regime detection (simple, robust)
 # ──────────────────────────────────────────────────────────────
 def classify_regime(returns, idx):
-    """Classify regime from 20d rolling vol and momentum."""
-    if idx < 20:
+    """Classify regime from 20d rolling vol, momentum, and vol trend."""
+    if idx < 40:
         return 'NORMAL'
     w = returns[max(0, idx-20):idx]
     vol = np.std(w, ddof=1) * np.sqrt(252)
     mom = np.sum(w)
+    # Check if vol is declining from a recent spike (recovery signal)
+    w_prev = returns[max(0, idx-40):max(0, idx-20)]
+    vol_prev = np.std(w_prev, ddof=1) * np.sqrt(252) if len(w_prev) > 2 else vol
     if vol > 0.30 and mom < -0.08:
         return 'CRISIS'
-    if vol > 0.22:
+    if vol > 0.22 and mom < 0:
         return 'CAUTIOUS'
+    # Recovery: vol was high but now declining, positive momentum
+    if vol_prev > 0.25 and vol < vol_prev * 0.85 and mom > 0:
+        return 'RECOVERY'
     if vol < 0.12 and mom > 0.01:
         return 'BULL'
     return 'NORMAL'
@@ -133,24 +140,28 @@ def run_mm_backtest(opens, highs, lows, closes, params):
 
     # Overlay inventory from market-making (can be + or -)
     overlay_inv = 0.0
-    max_overlay = order_sz * n_levels * 2  # max overlay position
+    max_overlay = min(order_sz * n_levels * 2, 0.50)  # cap at 50%
 
     for i in range(1, N):
         # ── Regime ──
         regime = classify_regime(rets, i)
 
-        # Base position: 100% long, trimmed slightly in crisis
+        # Base position: 100%+ long, trimmed in crisis, boosted in bull/recovery
         if regime == 'CRISIS':
             base = 1.0 - crisis_trim * 2
-            spread_mult = 2.5    # wider spreads → more profit per fill
-            size_mult = 0.6
+            spread_mult = 3.0    # very wide spreads → max profit per fill
+            size_mult = 0.5
         elif regime == 'CAUTIOUS':
             base = 1.0 - crisis_trim
-            spread_mult = 1.8
-            size_mult = 0.8
+            spread_mult = 2.0
+            size_mult = 0.7
+        elif regime == 'RECOVERY':
+            base = 1.03           # slight overweight on recovery
+            spread_mult = 1.4    # capture recovery vol
+            size_mult = 1.2
         elif regime == 'BULL':
-            base = 1.0
-            spread_mult = 0.7   # tighter in calm → more fills
+            base = 1.02           # slight leverage in bull
+            spread_mult = 0.7    # tight spreads → max fills
             size_mult = 1.2
         else:
             base = 1.0
@@ -175,8 +186,8 @@ def run_mm_backtest(opens, highs, lows, closes, params):
 
             # Buy limit fills if Low <= bid
             if lo <= bid:
-                # Bought below fair → spread capture
-                capture = sz * offset / fair
+                # Spread capture net of adverse selection
+                capture = sz * offset / fair * (1.0 - ADVERSE_SEL)
                 bar_spread_pnl += capture
                 bar_rebate += sz * MAKER_REBATE_BPS / 10_000
                 bar_spread_pnl -= sz * SEC_FEE_BPS / 10_000
@@ -185,7 +196,7 @@ def run_mm_backtest(opens, highs, lows, closes, params):
 
             # Sell limit fills if High >= ask
             if hi >= ask:
-                capture = sz * offset / fair
+                capture = sz * offset / fair * (1.0 - ADVERSE_SEL)
                 bar_spread_pnl += capture
                 bar_rebate += sz * MAKER_REBATE_BPS / 10_000
                 bar_spread_pnl -= sz * SEC_FEE_BPS / 10_000
@@ -194,7 +205,7 @@ def run_mm_backtest(opens, highs, lows, closes, params):
 
         # ── Inventory mean-reversion: gradually reduce overlay ──
         # Decay overlay toward zero (don't accumulate directional risk)
-        overlay_inv *= 0.90  # 10% decay per bar
+        overlay_inv *= 0.85  # 15% decay per bar — faster inventory reduction
 
         # Clamp overlay
         overlay_inv = np.clip(overlay_inv, -max_overlay, max_overlay)
@@ -239,11 +250,12 @@ def compute_metrics(s, b, fills, rebate, spread_pnl):
     tr = np.std(s - b, ddof=1) * np.sqrt(ann)
     ir = alpha / tr if tr > 1e-10 else 0
     calmar = ann_s / dd_s.max() if dd_s.max() > 1e-10 else 0
+    calmar_b = ann_b / dd_b.max() if dd_b.max() > 1e-10 else 0
 
     return {
         'ann_ret': ann_s, 'bench_ret': ann_b, 'alpha': alpha,
         'sharpe': sh_s, 'sharpe_bench': sh_b,
-        'sortino': sortino, 'calmar': calmar,
+        'sortino': sortino, 'calmar': calmar, 'calmar_bench': calmar_b,
         'max_dd': dd_s.max(), 'max_dd_bench': dd_b.max(),
         'info_ratio': ir,
         'total_ret': np.exp(np.sum(s)) - 1,
@@ -267,16 +279,19 @@ def walk_forward(o, h, l, c):
     keys = list(PARAM_GRID.keys())
     combos = list(product(*[PARAM_GRID[k] for k in keys]))
 
-    best_sharpe = -999
+    best_score = -999
     best_params = dict(zip(keys, combos[0]))
 
     for combo in combos:
         params = dict(zip(keys, combo))
         s, b, fl, rb, sp = run_mm_backtest(o[:split], h[:split], l[:split], c[:split], params)
         m = compute_metrics(s, b, fl, rb, sp)
-        if m and m['sharpe'] > best_sharpe:
-            best_sharpe = m['sharpe']
-            best_params = params
+        if m:
+            # Blend: Sharpe + Calmar + alpha (weighted toward alpha generation)
+            score = m['sharpe'] * 0.3 + m['calmar'] * 0.3 + m['alpha'] * 8.0
+            if score > best_score:
+                best_score = score
+                best_params = params
 
     # Out-of-sample test
     s, b, fl, rb, sp = run_mm_backtest(o[split:], h[split:], l[split:], c[split:], best_params)
@@ -284,7 +299,7 @@ def walk_forward(o, h, l, c):
     if m is None:
         return None
     m.update(best_params)
-    m['train_sharpe'] = best_sharpe
+    m['train_score'] = best_score
     m['train_bars'] = split
     m['test_bars'] = N - split
     m['strat_returns'] = s
@@ -384,9 +399,9 @@ def main():
         results.append(row)
 
         ns=sum([st1['significant'],st2['significant'],st3['significant'],st4['significant']])
-        print(f'Alpha={wf["alpha"]*100:+.2f}%  Sharpe={wf["sharpe"]:.3f}  '
+        print(f'Alpha={wf["alpha"]*100:+.2f}%  Sharpe={wf["sharpe"]:.3f}  Calmar={wf["calmar"]:.3f}  '
               f'Fill/d={wf["fills_per_day"]:.1f}  Spread={wf["spread_ann"]*100:.2f}%  '
-              f'Rebate={wf["rebate_ann"]*100:.3f}%  DD={wf["max_dd"]*100:.1f}%  [{ns}/4 sig]')
+              f'DD={wf["max_dd"]*100:.1f}%  [{ns}/4 sig]')
 
     if not results: sys.exit('No results.')
     df = pd.DataFrame(results)
@@ -400,11 +415,12 @@ def main():
     print('='*105)
 
     print(f'\n{"Asset":<6} {"Alpha":>7} {"Sharpe":>7} {"S.Bn":>6} '
-          f'{"Sortino":>8} {"MaxDD":>6} {"DD.Bn":>6} '
+          f'{"Sortino":>8} {"Calmar":>7} {"C.Bn":>6} '
+          f'{"MaxDD":>6} {"DD.Bn":>6} '
           f'{"Fil/d":>5} {"Spread":>7} {"Rebate":>7} '
           f'{"SR-p":>6} {"Bt-p":>6} {"Pm-p":>6} {"DSR":>5} '
           f'{"lvl":>4} {"stp":>4} {"sz":>5} {"crV":>5} {"trm":>5}')
-    print('-'*125)
+    print('-'*140)
 
     pa=0; sc=0
     for _,r in df.sort_values('alpha',ascending=False).iterrows():
@@ -414,13 +430,14 @@ def main():
         if ns>=2: sc+=1
         print(f'{r["asset"]:<6} {r["alpha"]*100:>+6.2f}% {r["sharpe"]:>7.3f} '
               f'{r["sharpe_bench"]:>6.3f} {r["sortino"]:>8.3f} '
+              f'{r["calmar"]:>7.3f} {r["calmar_bench"]:>6.3f} '
               f'{r["max_dd"]*100:>5.1f}% {r["max_dd_bench"]*100:>5.1f}% '
               f'{r["fills_per_day"]:>5.1f} {r["spread_ann"]*100:>6.2f}% '
               f'{r["rebate_ann"]*100:>6.3f}% '
               f'{r["sr_pval"]:>6.3f} {r["boot_pval"]:>6.3f} {r["perm_pval"]:>6.3f} '
               f'{r["dsr"]:>5.2f} '
               f'{r["n_levels"]:>4} {r["level_step_bps"]:>4} '
-              f'{r["order_size"]:>5.2f} {r["crisis_vol"]:>5.2f} '
+              f'{r["order_size"]:>5.02f} {r["crisis_vol"]:>5.2f} '
               f'{r["crisis_trim"]:>5.2f} {mk}')
 
     print(f'\n── Summary ──')
@@ -428,6 +445,8 @@ def main():
     print(f'  Significant:     {sc}/{len(df)}  (>=2 of 4 tests)')
     print(f'  Mean alpha:      {df["alpha"].mean()*100:+.2f}%')
     print(f'  Mean Sharpe:     {df["sharpe"].mean():.3f}  (bench: {df["sharpe_bench"].mean():.3f})')
+    print(f'  Mean Sortino:    {df["sortino"].mean():.3f}')
+    print(f'  Mean Calmar:     {df["calmar"].mean():.3f}  (bench: {df["calmar_bench"].mean():.3f})')
     print(f'  Mean MaxDD:      {df["max_dd"].mean()*100:.1f}%  (bench: {df["max_dd_bench"].mean()*100:.1f}%)')
     print(f'  Mean fills/day:  {df["fills_per_day"].mean():.1f}')
     print(f'  Mean spread/yr:  {df["spread_ann"].mean()*100:.2f}%')
