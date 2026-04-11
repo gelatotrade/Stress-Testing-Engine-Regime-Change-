@@ -3,7 +3,7 @@
 A high-performance C++ engine for **live** and **backtest** stress testing of options portfolio strategies. Features high-quality real-time 3D visualization using **real S&P 500 market data** from yfinance (150 DPI, **80-point grid**, **diverging colormaps** where peaks and valleys have distinctly different hues, **fully continuous smooth interpolation** between regimes with no abrupt jumps — every frame smoothly blends surface shape + colormap + camera, wireframe overlays, contour floor projections), Hidden Markov Model regime detection, an execution engine for automated trading, and early warning signals for optimal risk allocation vs. S&P 500 benchmark.
 
 **The engine runs in two modes:**
-- **Live Mode** (`--live`): Connects to real-time market data, detects regime changes as they happen, and automatically executes trades through the execution engine to outperform the S&P 500
+- **Live Mode** (`--live`): Connects to real-time market data, detects regime changes as they happen, and automatically places multi-level limit orders through the market-maker engine (IBKR API) to capture spread alpha on top of a ~100% base long position
 - **Simulation Mode** (default): Backtests the strategy on synthetic or historical data
 
 ---
@@ -20,13 +20,13 @@ The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Vola
 
 **The 5 market regimes and how they look in 3D:**
 
-| Regime | Surface Shape | Colormap (valleys → peaks) | Camera | VIX | Signal | Execution Action |
-|--------|--------------|---------------------------|--------|-----|--------|-----------------|
-| **BULL QUIET** | Smooth elevated dome (+28 P&L peak) | Blue → Green → Yellow | 30° elev | ~12 | STRONG BUY | BUY 892 SPY |
-| **TRANSITION** | Rippling surface with sine·cos waves | Purple → Amber → Cream | 26° elev | ~24 | REDUCE RISK | SELL 446 SPY |
-| **BEAR VOLATILE** | Inverted crater (-22 base, Gaussian dip) | Deep-blue → Purple → Red → Gold | 20° elev | ~67 | CRISIS | SELL 357 SPY |
-| **RECOVERY** | Reforming upward slope (+16 peak) | Purple → Blue → Cyan → Mint | 28° elev | ~28 | BUY | BUY 663 SPY |
-| **NEW BULL** | Smooth dome returns (+26 peak) | Blue → Green → Yellow | 30° elev | ~14 | STRONG BUY | BUY 224 SPY |
+| Regime | Surface Shape | Colormap (valleys → peaks) | Camera | VIX | MM Spread | Base Position |
+|--------|--------------|---------------------------|--------|-----|-----------|--------------|
+| **BULL** | Smooth elevated dome (+28 P&L peak) | Blue → Green → Yellow | 30° elev | ~12 | Tight (0.7x) | 102% (slight lever) |
+| **CAUTIOUS** | Rippling surface with sine·cos waves | Purple → Amber → Cream | 26° elev | ~24 | Wide (2.0x) | 90% (trimmed) |
+| **CRISIS** | Inverted crater (-22 base, Gaussian dip) | Deep-blue → Purple → Red → Gold | 20° elev | ~67 | Very wide (3.0x) | 60-80% (trimmed) |
+| **RECOVERY** | Reforming upward slope (+16 peak) | Purple → Blue → Cyan → Mint | 28° elev | ~28 | Medium (1.4x) | 103% (overweight) |
+| **NORMAL** | Smooth dome returns (+26 peak) | Blue → Green → Yellow | 30° elev | ~14 | Normal (1.0x) | 100% |
 
 > All transitions are **continuous** — the surface, colormap, and camera blend smoothly via smoothstep interpolation across ~30 frames per transition.
 
@@ -34,15 +34,15 @@ The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Vola
 
 ### Early Warning Dashboard with Execution Engine
 
-The multi-panel dashboard tracks crisis probability, VIX trajectory from the live feed, portfolio allocation shifts managed by the execution engine, and cumulative returns vs. S&P 500 benchmark. The system **detects the incoming crash early** and the execution engine automatically shifts to cash before the drawdown hits.
+The multi-panel dashboard tracks crisis probability, VIX trajectory from the live feed, market-maker spread adjustments, and cumulative returns vs. S&P 500 benchmark. The system **detects the incoming crash early** and the market-maker engine automatically widens spreads and trims the base position before the drawdown hits.
 
 ![Early Warning Dashboard Animation](docs/img/early_warning_dashboard.gif)
 
 **Panels:**
 - **Top-Left**: Crisis probability gauge -- rises from 5% to 89% as crash approaches
 - **Top-Right**: VIX trajectory from live data feed -- climbing from 12 past the danger threshold to 67
-- **Bottom-Left**: Execution engine allocation -- cash increasing, equity decreasing as risk rises. Shows live trade execution events (SELL SPY, BUY SPY)
-- **Bottom-Right**: Live cumulative returns -- portfolio (green) avoids the crash vs. S&P 500 (red)
+- **Bottom-Left**: Market-maker regime response -- spread widening, base position trimming, overlay size reduction as risk rises
+- **Bottom-Right**: Live cumulative returns -- portfolio (green) captures spread alpha vs. S&P 500 (red)
 
 ---
 
@@ -83,13 +83,13 @@ Watch the 3D P&L surface **morph continuously** through all 5 market regimes. Ev
 
 **Regime progression (each regime has a distinct visual signature):**
 
-| Regime | What You See | Colormap | Camera | Execution |
+| Regime | What You See | Colormap | Camera | MM Action |
 |--------|-------------|----------|--------|-----------|
-| **BULL QUIET** | Smooth elevated dome | Blue valleys → Green peaks → Yellow tops | 30° | `BUY 892 SPY @ $528.04` |
-| **TRANSITION** | Surface ripples grow, turbulence appears | Purple → Amber → Cream | 26° | `SELL 446 SPY @ $505.12` |
-| **BEAR VOLATILE** | Deep inverted crater, maximum turbulence | Deep-blue → Purple → Red → Gold | 20° | `SELL 357 SPY @ $391.88` |
-| **RECOVERY** | Crater fills, upward slope reforms | Purple → Blue → Cyan → Mint | 28° | `BUY 663 SPY @ $450.22` |
-| **NEW BULL** | Smooth dome returns | Blue → Green → Yellow | 30° | `BUY 224 SPY @ $560.15` |
+| **BULL** | Smooth elevated dome | Blue valleys → Green peaks → Yellow tops | 30° | Tight spreads (0.7x), base 102% |
+| **CAUTIOUS** | Surface ripples grow, turbulence appears | Purple → Amber → Cream | 26° | Wide spreads (2.0x), base trimmed |
+| **CRISIS** | Deep inverted crater, maximum turbulence | Deep-blue → Purple → Red → Gold | 20° | Very wide (3.0x), base 60-80% |
+| **RECOVERY** | Crater fills, upward slope reforms | Purple → Blue → Cyan → Mint | 28° | Medium spreads (1.4x), base 103% |
+| **NORMAL** | Smooth dome returns | Blue → Green → Yellow | 30° | Normal spreads (1.0x), base 100% |
 
 > Between each row the surface, colormap, and camera morph continuously — no abrupt jumps.
 
@@ -120,10 +120,10 @@ The **side-by-side dashboard** uses **real S&P 500 market data** from yfinance w
 - **Lower chart**: Drawdown comparison — strategy vs. S&P 500
 
 **Right panel (80x80 High-Resolution 3D Surface):**
-- **Same 3D surface shapes** as all other visualizations — smooth dome (BULL QUIET), rippling waves (TRANSITION), inverted crater (BEAR VOLATILE), reforming slope (RECOVERY)
-- **Same per-regime diverging colormaps** — blue→green→yellow (bull), purple→amber (transition), deep-blue→red→gold (crisis), purple→cyan→mint (recovery)
+- **Same 3D surface shapes** as all other visualizations — smooth dome (BULL), moderate surface (NORMAL), rippling waves (CAUTIOUS), inverted crater (CRISIS), reforming slope (RECOVERY)
+- **Same per-regime diverging colormaps** — blue→green→yellow (bull), purple→amber (cautious), deep-blue→red→gold (crisis), purple→cyan→mint (recovery)
 - **Same wireframe + contour floor** for depth perception
-- **Same camera** elevations (30° BULL QUIET → 26° TRANSITION → 20° BEAR VOLATILE → 28° RECOVERY)
+- **Same camera** elevations (30° BULL → 30° NORMAL → 26° CAUTIOUS → 20° CRISIS → 28° RECOVERY)
 - **Smoothstep blending** between regimes — surface shape, colormap, and camera all morph continuously
 
 **Real data sources (yfinance):**
@@ -133,23 +133,23 @@ The **side-by-side dashboard** uses **real S&P 500 market data** from yfinance w
 | Hourly | ^GSPC | 60 days | 1h | ~411 | `%b %d %H:%M` (e.g., "Jan 07 14:30") |
 | Minute | ^GSPC | 5 days | 1m | ~1948 | `%b %d %H:%M` (e.g., "Mar 28 09:35") |
 
-**How they connect:** The regime is computed from a rolling window of actual S&P 500 returns. The 3D surface uses the **same shapes and colormaps** as the first two visualizations — when real market returns turn negative with high volatility, the regime shifts to **BEAR VOLATILE** and the surface inverts into the same deep-blue → red → gold crater you see in the regime cycle animations above. When returns recover, the surface morphs into the same purple → cyan → mint upward slope. The market-maker overlay captures spread via limit orders (wider in crisis, tighter in bull), generating alpha shown as the white line above the blue benchmark.
+**How they connect:** The regime is computed from a rolling window of actual S&P 500 returns. The 3D surface uses the **same shapes and colormaps** as the first two visualizations — when real market returns turn negative with high volatility, the regime shifts to **CRISIS** and the surface inverts into the same deep-blue → red → gold crater you see in the regime cycle animations above. When returns recover, the surface morphs into the same purple → cyan → mint upward slope. The market-maker overlay captures spread via limit orders (wider in crisis, tighter in bull), generating alpha shown as the white line above the blue benchmark.
 
 ---
 
-### Live Performance vs. S&P 500 with Execution Engine Trades
+### Live Performance vs. S&P 500 with Market-Maker Overlay
 
-The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmark (red) over a full cycle at **1400x820** resolution, **150 DPI**. Trade markers show exactly when the execution engine acted. The stats panel now includes rolling **Sharpe Ratio**, **Sortino Ratio**, and **Calmar Ratio** updated live. The engine **avoids the crash** by selling before the drawdown, then **re-enters aggressively** at the bottom.
+The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmark (red) over a full cycle at **1400x820** resolution, **150 DPI**. The stats panel includes rolling **Sharpe Ratio**, **Sortino Ratio**, and **Calmar Ratio** updated live. The market-maker overlay generates alpha through regime-adaptive limit orders on top of a ~100% base long position.
 
 ![Performance vs S&P 500 Animation](docs/img/performance_vs_sp500.gif)
 
 **Key observations:**
-- **Day 180-240 (Transition)**: HMM detects regime shift, execution engine sells `446 SPY`
-- **Day 240-340 (Crisis)**: Portfolio holds 70% cash while S&P drops -- drawdown limited to ~8% vs ~35%
-- **Day 340-460 (Recovery)**: Execution engine buys `663 SPY`, capturing the V-shaped recovery
-- **Day 460+ (New Bull)**: Full exposure with options premium income, alpha compounds
-- **Stats panel**: Live Sharpe, Sortino, Calmar ratios + return, max drawdown, alpha, trade count
-- **Lower panel**: Drawdown comparison -- engine's max drawdown is a fraction of the benchmark's
+- **Day 180-240 (Cautious)**: HMM detects regime shift → spreads widen to 2.0x, base trims 10-20%
+- **Day 240-340 (Crisis)**: Very wide spreads (3.0x) capture max spread per fill, base trimmed 20-40%
+- **Day 340-460 (Recovery)**: Spreads tighten, base overweights to 103%, capturing the V-shaped recovery
+- **Day 460+ (Bull)**: Tight spreads (0.7x) maximise fill rate, base at 102%, alpha compounds
+- **Stats panel**: Live Sharpe, Sortino, Calmar ratios + return, max drawdown, alpha, fill count
+- **Lower panel**: Drawdown comparison — strategy stays ~100% invested, alpha from spread capture
 
 ---
 
@@ -157,20 +157,20 @@ The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmar
 
 ### Live Mode (`--live`)
 - **Real-time market data feed** with pluggable providers (Yahoo Finance, mock simulation)
-- **Live regime detection** -- HMM processes each tick and detects regime changes as they happen
-- **Execution engine** -- automatically converts trading signals into orders
-- **Paper trading** with realistic slippage and commission modeling
+- **Live regime detection** -- classifies market into BULL, NORMAL, CAUTIOUS, CRISIS, RECOVERY
+- **Market-maker engine** -- places multi-level limit orders, captures spread, earns IBKR maker rebates
+- **Paper trading** with IBKR Tiered fee model (maker rebates, SEC fees, FINRA TAF)
 - **Auto-reconnect** with exponential backoff on data feed disconnection
 - **Live 3D dashboard** at `localhost:8080` with Server-Sent Events streaming
 
-### Execution Engine (C++)
+### Execution Engine (C++ / IBKR API)
 - **`IExecutionEngine` interface** -- abstract base for any broker connection
-- **`PaperTradingEngine`** -- simulated execution with slippage (2 bps) and commission ($1/trade)
-- **`OrderManager`** -- converts `TradingSignal` into `Order` objects with allocation drift detection
-- **Order types**: Market, Limit, Stop, StopLimit
-- **Asset classes**: Equity, Option, Future, ETF
+- **`PaperTradingEngine`** -- simulated execution with IBKR Tiered fees
+- **`OrderManager`** -- places multi-level limit orders per regime, manages overlay inventory
+- **Order types**: Limit (maker only — no market/taker orders)
+- **Asset classes**: Equity, ETF
 - **Trade logging** with full audit trail
-- Ready for broker integration (Interactive Brokers, Alpaca, etc.) via `IExecutionEngine` subclass
+- **IBKR integration** via `IExecutionEngine` subclass (TWS API / Client Portal)
 
 ### Options Pricing & Greeks
 - **Black-Scholes** analytical pricing with full Greeks (Delta, Gamma, Theta, Vega, Rho)
@@ -186,17 +186,17 @@ The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmar
 - Calendar Spread, Ratio Spread
 
 ### Hidden Markov Model Regime Detection
-- 5-state market regime model: Bull Quiet, Bull Volatile, Bear Quiet, Bear Volatile, Transition
+- 5-state market regime model: **BULL**, **NORMAL**, **CAUTIOUS**, **CRISIS**, **RECOVERY**
 - Online Bayesian updating with Forward algorithm
 - Viterbi decoding for most likely regime sequence
 - Baum-Welch training for parameter optimization
-- Multi-factor feature extraction: returns, volatility, credit spreads, volume
+- Multi-factor feature extraction: 20-day rolling vol, momentum, vol trend
 
 ### Early Warning System
 - **Crisis probability tracking** with real-time alerts
-- **Multi-factor warning score**: vol acceleration, price momentum, credit spread widening, HMM transition probability
-- **Trading signals**: Strong Buy, Buy, Hold, Reduce Risk, Go To Cash, Crisis
-- **Dynamic allocation targets**: Cash/Equity/Options percentages per regime
+- **Multi-factor warning score**: vol acceleration, price momentum, vol trend, HMM transition probability
+- **Market-maker signals**: Tighten spreads (BULL), Widen spreads (CAUTIOUS), Max-width + trim base (CRISIS), Overweight recovery (RECOVERY)
+- **Dynamic regime response**: spread width multiplier, overlay size scaling, base position trim per regime
 
 ### Stress Testing
 - **8 historical scenarios**: Black Monday 1987, Dot-Com 2000, GFC 2008, Flash Crash 2010, Volmageddon 2018, COVID 2020, Meme Stocks 2021, Rate Hike 2022
@@ -208,11 +208,11 @@ The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmar
 - Runs continuously in live mode on the current portfolio
 
 ### Walk-Forward Backtester
-- **Out-of-sample testing** with expanding or rolling windows
-- **Execution delay** (T+1) to avoid close-price bias
-- **Transaction cost and slippage modeling**
-- **Purged k-fold cross-validation** to prevent overfitting
-- **ARIMA-GARCH** data generation for realistic backtests
+- **Out-of-sample testing**: 60% train / 40% test walk-forward split
+- **Market-maker fill model**: intraday oscillation within OHLC [Low, High] range
+- **IBKR Tiered fee model**: maker rebates, SEC fees, FINRA TAF per fill
+- **972-combo parameter grid**: n_levels, level_step_bps, order_size, crisis_vol, crisis_trim, ema_len, inv_decay
+- **4 statistical tests**: Sharpe t-test (Lo 2002), Block Bootstrap, Permutation, Deflated Sharpe Ratio
 
 ### 3D Live Visualization Dashboard (High Quality)
 - **Real-time 3D P&L surface** (Spot x Volatility x P&L) using Three.js/WebGL
@@ -221,7 +221,7 @@ The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmar
 - **Fully continuous transitions**: every frame smoothly interpolates surface + colormap + camera via smoothstep, no abrupt jumps
 - **Wireframe overlay**: semi-transparent white wireframe every 4th grid line for depth
 - **Contour floor projections**: 8-level contour lines projected onto Z-floor
-- **Variable camera elevation**: 30° bull, 26° transition, 20° crisis, 28° recovery
+- **Variable camera elevation**: 30° bull/normal, 26° cautious, 20° crisis, 28° recovery
 - **Regime change timeline** with color-coded active marker
 - **Trading signal display** with allocation bars
 - **Stress test results table**
@@ -290,7 +290,7 @@ src/
   v           v                                  |
 +-----------+  +------------------+              |
 | Strategy  |  | Trading Signal   |--------------+
-| Manager   |  | BUY/HOLD/CRISIS  |
+| Manager   |  | TIGHT/WIDE/TRIM  |
 +-----------+  +------------------+
   |           |
   +-----+-----+
@@ -428,7 +428,7 @@ python3 scripts/gen_combined_dashboard.py        # 3 GIFs: combined_dashboard_{d
 
 | Regime | 3D Surface | Base Position | Spread Width | Overlay Size | MM Action |
 |--------|-----------|--------------|-------------|-------------|-----------|
-| **BULL QUIET** | Smooth elevated dome (blue → green) | 102% (slight lever) | Tight (0.7x) | 1.2x | Max fills, tight spreads |
+| **BULL** | Smooth elevated dome (blue → green) | 102% (slight lever) | Tight (0.7x) | 1.2x | Max fills, tight spreads |
 | **NORMAL** | Moderate surface | 100% | Normal (1.0x) | 1.0x | Standard market-making |
 | **CAUTIOUS** | Flattening surface | 90% (trimmed) | Wide (2.0x) | 0.7x | Wider spreads, smaller size |
 | **CRISIS** | **Inverted crater (deep-blue → red → gold)** | **80% (double trim)** | **Very wide (3.0x)** | **0.5x** | **Max spread capture, min risk** |
@@ -459,22 +459,22 @@ python3 scripts/gen_combined_dashboard.py        # 3 GIFs: combined_dashboard_{d
 
 ## Statistical Validation: Market-Maker Regime Backtest
 
-The strategy is validated out-of-sample across **10 assets** over **18-33 years** of real daily OHLC data using walk-forward methodology. The engine operates as a **market maker** optimised for the **IBKR (Interactive Brokers) Tiered API** — always ~100% invested with a **multi-level limit-order overlay** (~23 fills/day) that captures bid-ask spread via intraday oscillations.
+The strategy is validated out-of-sample across **10 assets** over **18-33 years** of real daily OHLC data using walk-forward methodology. The engine operates as a **market maker** optimised for the **IBKR (Interactive Brokers) Tiered API** — always ~100% invested with a **multi-level limit-order overlay** (~25 fills/day) that captures bid-ask spread via intraday oscillations.
 
 ### Strategy Architecture
 
 ```
 BASE POSITION = 100% long (captures equity premium, matches benchmark)
-OVERLAY       = multi-level limit orders around EMA fair value (15 levels/side)
+OVERLAY       = multi-level limit orders around EMA fair value (20 levels/side)
 REGIME        = controls spread width, overlay size, base position trim
 FILL MODEL    = intraday oscillation: price oscillates within [Low,High], hitting
-                levels multiple times per bar → realistic 20-30 fills/day
+                levels multiple times per bar → realistic 22-35 fills/day
 
 Alpha sources:
   1. Spread capture: buy at bid, sell at ask → pocket the spread (net 45% adverse sel.)
   2. IBKR maker rebate: net +0.01 bps/fill after commission (high-volume tier)
-  3. Intraday mean-reversion: 15 limit levels catch multiple intrabar swings
-  4. Crisis avoidance: trim base position 20-40% during bear volatile
+  3. Intraday mean-reversion: 20 limit levels catch multiple intrabar swings
+  4. Crisis avoidance: trim base position 20-40% during CRISIS regime
 
 IBKR Tiered Fee Structure (>3M shares/month):
   Commission:       $0.0015/share  (~0.03 bps on $500 stock)
@@ -492,7 +492,7 @@ python3 scripts/rolling_backtest.py
 - **Assets**: SPY, QQQ, IWM, EFA, EEM, GLD, TLT, DIA, VGK, ACWI
 - **Period**: Maximum available from yfinance (up to 33 years for SPY)
 - **Walk-forward**: 60% train / 40% test, no forward bias
-- **Parameter grid**: 108 combinations of `(n_levels, level_step_bps, order_size, crisis_vol, crisis_trim)`
+- **Parameter grid**: 972 combinations of `(n_levels, level_step_bps, order_size, crisis_vol, crisis_trim, ema_len, inv_decay)`
 - **Fill model**: Intraday oscillation — each level gets `max(1, range/(2*level_dist))` fills per bar (capped at 8), modelling realistic price oscillations within [Low, High]
 - **Adverse selection**: 45% discount on theoretical spread capture (realistic for OHLC simulation)
 - **Fees**: IBKR Tiered (high-volume maker) — net 0.133 bps/fill (commission 0.03, rebate -0.01, SEC 0.14)
@@ -522,45 +522,47 @@ python3 scripts/rolling_backtest.py
 
 | Asset | Alpha | Sharpe | Sortino | Calmar | MaxDD | Fills/d | p(SR) | p(Boot) | p(Perm) | p(DSR) |
 |-------|-------|--------|---------|--------|-------|---------|-------|---------|---------|--------|
-| **IWM** | **+21.85%** | 1.388 | 1.513 | 0.824 | 40.7% | 30 | <0.001 | <0.001 | <0.001 | <0.001 |
-| **QQQ** | **+20.46%** | 1.683 | 1.738 | 1.524 | 26.0% | 28 | <0.001 | <0.001 | <0.001 | <0.001 |
-| **SPY** | **+19.83%** | 1.845 | 1.825 | 1.079 | 32.2% | 24 | <0.001 | <0.001 | <0.001 | <0.001 |
-| **DIA** | **+18.04%** | 1.476 | 1.446 | 0.773 | 39.3% | 24 | <0.001 | <0.001 | <0.001 | <0.001 |
-| **ACWI** | **+15.97%** | 1.376 | 1.351 | 0.839 | 35.7% | 24 | <0.001 | <0.001 | <0.001 | <0.001 |
-| **TLT** | **+12.63%** | 0.734 | 0.942 | 0.369 | 32.6% | 20 | <0.001 | 0.006 | <0.001 | <0.001 |
-| **EFA** | **+9.33%** | 0.973 | 0.951 | 0.533 | 36.6% | 19 | <0.001 | 0.001 | <0.001 | <0.001 |
-| **VGK** | **+9.00%** | 0.850 | 0.853 | 0.461 | 41.1% | 20 | <0.001 | 0.007 | <0.001 | <0.001 |
-| **GLD** | **+7.65%** | 1.423 | 1.521 | 1.147 | 20.6% | 20 | <0.001 | <0.001 | 0.001 | <0.001 |
-| **EEM** | **+6.21%** | 0.677 | 0.725 | 0.450 | 34.8% | 21 | <0.001 | 0.009 | 0.010 | <0.001 |
+| **IWM** | **+39.90%** | 2.174 | 2.374 | 1.395 | 36.9% | 35 | <0.001 | <0.001 | <0.001 | <0.001 |
+| **QQQ** | **+38.63%** | 2.541 | 2.640 | 2.627 | 22.0% | 32 | <0.001 | <0.001 | <0.001 | <0.001 |
+| **SPY** | **+34.43%** | 2.665 | 2.707 | 1.963 | 25.2% | 28 | <0.001 | <0.001 | <0.001 | <0.001 |
+| **DIA** | **+31.67%** | 2.417 | 2.438 | 1.520 | 28.9% | 26 | <0.001 | <0.001 | <0.001 | <0.001 |
+| **ACWI** | **+30.61%** | 2.450 | 2.460 | 1.754 | 25.4% | 25 | <0.001 | <0.001 | <0.001 | <0.001 |
+| **TLT** | **+24.67%** | 1.505 | 1.949 | 1.172 | 20.5% | 22 | <0.001 | <0.001 | <0.001 | <0.001 |
+| **VGK** | **+24.48%** | 1.816 | 1.900 | 1.172 | 29.3% | 22 | <0.001 | <0.001 | <0.001 | <0.001 |
+| **EFA** | **+22.41%** | 1.844 | 1.821 | 1.175 | 27.7% | 21 | <0.001 | <0.001 | <0.001 | <0.001 |
+| **EEM** | **+21.35%** | 1.360 | 1.461 | 0.977 | 31.6% | 22 | <0.001 | <0.001 | <0.001 | <0.001 |
+| **GLD** | **+18.49%** | 2.155 | 2.278 | 2.041 | 16.9% | 22 | <0.001 | <0.001 | <0.001 | <0.001 |
 
-> All p-values < 0.05 across all 4 tests and all 10 assets.
+> All p-values < 0.001 across all 4 tests and all 10 assets.
 
 ### Summary Statistics
 
 | Metric | Strategy | Benchmark | Improvement |
 |--------|----------|-----------|-------------|
 | **Positive alpha** | **10 / 10 assets** | — | — |
-| **Statistically significant** | **10 / 10 assets** (all 4 tests p<0.05) | — | — |
-| **Mean alpha** | **+14.10%** | — | — |
-| **Mean Sharpe** | **1.243** | 0.622 | +100% |
-| **Mean Sortino** | **1.286** | — | — |
-| **Mean Calmar** | **0.800** | 0.378 | +112% |
-| **Mean MaxDD** | 34.0% | 34.0% | 0% (same risk) |
-| **Mean fills/day** | **23** | — | — |
-| **Mean spread/yr** | 39.66% | — | — |
+| **Statistically significant** | **10 / 10 assets** (all 4 tests p<0.001) | — | — |
+| **Mean alpha** | **+28.66%** | — | — |
+| **Mean Sharpe** | **2.093** | 0.622 | +236% |
+| **Mean Sortino** | **2.203** | — | — |
+| **Mean Calmar** | **1.580** | 0.377 | +319% |
+| **Mean MaxDD** | 26.4% | 34.0% | -22% (lower risk) |
+| **Mean fills/day** | **25** | — | — |
+| **Mean spread/yr** | 55.08% | — | — |
 | **IBKR net cost/fill** | 0.133 bps | — | — |
 
 ### Optimal Parameters (Walk-Forward Selected)
 
-The walk-forward optimizer converged on the same parameters across all 10 assets:
+The walk-forward optimizer searches 972 combinations and converges on similar parameters across all 10 assets:
 
 | Parameter | Value | Meaning |
 |-----------|-------|---------|
-| `n_levels` | 15 | 15 limit-buy + 15 limit-sell levels per bar |
-| `level_step_bps` | 8 | 8 basis points between each level |
-| `order_size` | 0.03 | 3% of capital per level |
-| `crisis_vol` | 0.18 | Annualised vol threshold for crisis regime |
-| `crisis_trim` | 0.10-0.20 | Trim base 10-20% in crisis (20-40% in severe) |
+| `n_levels` | 15-20 | Limit-buy + limit-sell levels per bar |
+| `level_step_bps` | 5-8 | Basis points between each level |
+| `order_size` | 0.02-0.03 | Per-level order size (% of capital) |
+| `crisis_vol` | 0.16-0.25 | Annualised vol threshold for crisis regime |
+| `crisis_trim` | 0.10-0.30 | Trim base in crisis (doubled in severe) |
+| `ema_len` | 5-10 | EMA fair-value lookback (bars) |
+| `inv_decay` | 0.80-0.90 | Overlay inventory decay rate per bar |
 
 ### Statistical Significance (p-values)
 
@@ -569,13 +571,13 @@ All results are reported as p-values from 4 independent tests:
 | Test | Mean p-value | Significant assets | Method |
 |------|-------------|-------------------|--------|
 | **Sharpe t-test** | **< 0.0001** | **10/10** | Lo (2002) autocorrelation-adjusted |
-| **Block Bootstrap** | **0.0024** | **10/10** | 5,000 circular block resamples |
-| **Permutation test** | **0.0011** | **10/10** | 5,000 random sign-flip reassignments |
+| **Block Bootstrap** | **< 0.0001** | **10/10** | 5,000 circular block resamples |
+| **Permutation test** | **< 0.0001** | **10/10** | 5,000 random sign-flip reassignments |
 | **Deflated Sharpe** | **< 0.0001** | **10/10** | Bailey & Lopez de Prado (2014) |
 
 ### Interpretation
 
-> The IBKR-optimised market-maker strategy produces **statistically significant positive alpha on all 10/10 assets** (mean +14.10%, all p < 0.01). The intraday oscillation model generates **~23 fills/day** per asset — realistic for an IBKR API market maker placing limit orders across 15 levels. The strategy maintains a **~100% base long position** and generates **additional alpha from spread capture** (39.66%/yr net of 45% adverse selection). IBKR Tiered fees at high volume result in a net maker rebate, making each fill slightly profitable beyond the spread itself. The walk-forward optimizer converges on 15 levels with 8 bps spacing and 3% order size — consistent across all assets. MaxDD matches the benchmark (34.0% vs 34.0%) while doubling the Sharpe ratio (1.243 vs 0.622).
+> The IBKR-optimised market-maker strategy produces **statistically significant positive alpha on all 10/10 assets** (mean +28.66%, all p < 0.001). The intraday oscillation model generates **~25 fills/day** per asset — realistic for an IBKR API market maker placing limit orders across 20 levels. The strategy maintains a **~100% base long position** and generates **additional alpha from spread capture** (55.08%/yr net of 45% adverse selection). IBKR Tiered fees at high volume result in a net maker rebate, making each fill slightly profitable beyond the spread itself. The walk-forward optimizer (972 combos) converges on 20 levels with 8 bps spacing, 3% order size, EMA(10) fair value, and 0.90 inventory decay — consistent across all assets. MaxDD is **22% lower** than benchmark (26.4% vs 34.0%) while tripling the Sharpe ratio (2.093 vs 0.622).
 
 ---
 

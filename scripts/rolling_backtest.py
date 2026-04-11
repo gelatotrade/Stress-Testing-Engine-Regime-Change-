@@ -60,15 +60,16 @@ ASSETS = ['SPY', 'QQQ', 'IWM', 'EFA', 'EEM', 'GLD', 'TLT', 'DIA', 'VGK', 'ACWI']
 TRAIN_PCT      = 0.60
 MIN_TRAIN_BARS = 756
 MIN_TEST_BARS  = 252
-EMA_LEN        = 10
 
 # ── Parameter grid (walk-forward searched) ──
 PARAM_GRID = {
-    'n_levels':       [5, 10, 15],     # limit levels per side (MM uses many)
+    'n_levels':       [10, 15, 20],    # limit levels per side
     'level_step_bps': [3, 5, 8],       # tight spacing for more fills
-    'order_size':     [0.01, 0.02, 0.03], # per-level order (small, many fills)
-    'crisis_vol':     [0.18, 0.22],    # annualised vol for crisis detection
-    'crisis_trim':    [0.10, 0.20],    # crisis avoidance trim
+    'order_size':     [0.01, 0.02, 0.03], # per-level order
+    'crisis_vol':     [0.16, 0.20, 0.25], # wider detection range
+    'crisis_trim':    [0.10, 0.20, 0.30], # aggressive crisis avoidance
+    'ema_len':        [5, 10],         # EMA fair-value responsiveness
+    'inv_decay':      [0.80, 0.90],    # overlay inventory decay rate
 }
 
 # ── Stats ──
@@ -83,22 +84,24 @@ OUT_DIR = Path(__file__).resolve().parent.parent / 'results'
 # ──────────────────────────────────────────────────────────────
 # Regime detection (simple, robust)
 # ──────────────────────────────────────────────────────────────
-def classify_regime(returns, idx):
-    """Classify regime from 20d rolling vol, momentum, and vol trend."""
+def classify_regime(returns, idx, crisis_vol=0.22):
+    """Classify regime from 20d rolling vol, momentum, and vol trend.
+    crisis_vol is walk-forward searched — no forward bias."""
     if idx < 40:
         return 'NORMAL'
     w = returns[max(0, idx-20):idx]
     vol = np.std(w, ddof=1) * np.sqrt(252)
     mom = np.sum(w)
-    # Check if vol is declining from a recent spike (recovery signal)
     w_prev = returns[max(0, idx-40):max(0, idx-20)]
     vol_prev = np.std(w_prev, ddof=1) * np.sqrt(252) if len(w_prev) > 2 else vol
-    if vol > 0.30 and mom < -0.08:
+    # Thresholds derived from crisis_vol (walk-forward parameter)
+    crisis_thresh = crisis_vol + 0.10   # e.g. 0.26-0.35
+    cautious_thresh = crisis_vol        # e.g. 0.16-0.25
+    if vol > crisis_thresh and mom < -0.06:
         return 'CRISIS'
-    if vol > 0.22 and mom < 0:
+    if vol > cautious_thresh and mom < 0:
         return 'CAUTIOUS'
-    # Recovery: vol was high but now declining, positive momentum
-    if vol_prev > 0.25 and vol < vol_prev * 0.85 and mom > 0:
+    if vol_prev > cautious_thresh + 0.05 and vol < vol_prev * 0.85 and mom > 0:
         return 'RECOVERY'
     if vol < 0.12 and mom > 0.01:
         return 'BULL'
@@ -127,13 +130,15 @@ def run_mm_backtest(opens, highs, lows, closes, params):
     order_sz = params['order_size']
     crisis_vol = params['crisis_vol']
     crisis_trim = params['crisis_trim']
+    ema_len = params['ema_len']
+    inv_decay = params['inv_decay']
 
     N = len(closes)
 
     # EMA for fair value
     ema = np.empty(N)
     ema[0] = closes[0]
-    a = 2.0 / (EMA_LEN + 1)
+    a = 2.0 / (ema_len + 1)
     for i in range(1, N):
         ema[i] = a * closes[i] + (1 - a) * ema[i-1]
 
@@ -152,8 +157,8 @@ def run_mm_backtest(opens, highs, lows, closes, params):
     max_overlay = min(order_sz * n_levels * 2, 0.50)  # cap at 50%
 
     for i in range(1, N):
-        # ── Regime ──
-        regime = classify_regime(rets, i)
+        # ── Regime (uses crisis_vol from params, no forward bias) ──
+        regime = classify_regime(rets, i, crisis_vol)
 
         # Base position: 100%+ long, trimmed in crisis, boosted in bull/recovery
         if regime == 'CRISIS':
@@ -225,7 +230,7 @@ def run_mm_backtest(opens, highs, lows, closes, params):
 
         # ── Inventory mean-reversion: gradually reduce overlay ──
         # Decay overlay toward zero (don't accumulate directional risk)
-        overlay_inv *= 0.85  # 15% decay per bar — faster inventory reduction
+        overlay_inv *= inv_decay  # decay per bar toward zero
 
         # Clamp overlay
         overlay_inv = np.clip(overlay_inv, -max_overlay, max_overlay)
@@ -447,8 +452,8 @@ def main():
           f'{"MaxDD":>6} {"DD.Bn":>6} '
           f'{"Fil/d":>6} {"Spread":>7} '
           f'{"p(SR)":>7} {"p(Boot)":>7} {"p(Perm)":>7} {"p(DSR)":>7} '
-          f'{"lvl":>4} {"stp":>4} {"sz":>5} {"crV":>5} {"trm":>5}')
-    print('-'*150)
+          f'{"lvl":>4} {"stp":>4} {"sz":>5} {"crV":>5} {"trm":>5} {"ema":>4} {"dec":>5}')
+    print('-'*165)
 
     pa=0; sc=0
     for _,r in df.sort_values('alpha',ascending=False).iterrows():
@@ -464,7 +469,7 @@ def main():
               f'{fmt_p(r["perm_pval"]):>7} {fmt_p(r["dsr"]):>7} '
               f'{r["n_levels"]:>4} {r["level_step_bps"]:>4} '
               f'{r["order_size"]:>5.02f} {r["crisis_vol"]:>5.2f} '
-              f'{r["crisis_trim"]:>5.2f}')
+              f'{r["crisis_trim"]:>5.2f} {r["ema_len"]:>4} {r["inv_decay"]:>5.2f}')
 
     print(f'\n── Summary ──')
     print(f'  Positive alpha:  {pa}/{len(df)}')
