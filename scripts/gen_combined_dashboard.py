@@ -5,9 +5,11 @@ Generate combined dashboard GIFs with REAL S&P 500 data from yfinance:
   2. combined_dashboard_hourly.gif  - Real hourly data (~60 days)
   3. combined_dashboard_minute.gif  - Real minute data (~5 days)
 
-Left:  S&P 500 (Buy & Hold) vs Strategy with real dates on x-axis
-Right: High-resolution 3D P&L surface (80x80 grid) with same per-regime
-       colormaps as all other visualizations.
+Left:  S&P 500 (Buy & Hold) vs Market-Maker Strategy with real dates on x-axis
+Right: High-resolution 3D P&L surface (80x80 grid) with per-regime colormaps.
+
+Strategy: ~100% base long + multi-level limit-order overlay.
+Regimes: BULL, NORMAL, CAUTIOUS, CRISIS, RECOVERY.
 
 Requires: pip install yfinance matplotlib numpy Pillow
 """
@@ -28,7 +30,7 @@ from datetime import datetime
 import yfinance as yf
 
 # ---------------------------------------------------------------------------
-# Style  (identical to generate_visualizations.py / generate_extra_vis...)
+# Style
 # ---------------------------------------------------------------------------
 BG   = '#080810'
 BG2  = '#0e0e1a'
@@ -41,26 +43,40 @@ CYAN   = '#00ffcc'
 WHITE  = '#ffffff'
 GRID_C = '#1a1a2e'
 DIM    = '#556677'
+ORANGE = '#ff8800'
 
-# Per-regime diverging colormaps — SAME as all other visualisation scripts
+# 5-regime colormaps
 CMAP_BULL = LinearSegmentedColormap.from_list('bull', [
     '#0000aa', '#0055cc', '#22aa66', '#00ff88', '#eeffaa', '#ffffdd'])
-CMAP_TRANS = LinearSegmentedColormap.from_list('trans', [
+CMAP_NORMAL = LinearSegmentedColormap.from_list('normal', [
+    '#001144', '#003388', '#2266aa', '#44aacc', '#88ddee', '#ccffff'])
+CMAP_CAUTIOUS = LinearSegmentedColormap.from_list('cautious', [
     '#440066', '#8833aa', '#cc7700', '#ffaa00', '#ffdd44', '#ffffcc'])
 CMAP_CRISIS = LinearSegmentedColormap.from_list('crisis', [
     '#000044', '#220066', '#660088', '#cc0022', '#ff4444', '#ffcc44'])
 CMAP_RECOV = LinearSegmentedColormap.from_list('recov', [
     '#330044', '#553388', '#0066aa', '#00ccee', '#66ffcc', '#eeffee'])
-REGIME_CMAPS = {
-    'BULL QUIET':    CMAP_BULL,
-    'TRANSITION':    CMAP_TRANS,
-    'BEAR VOLATILE': CMAP_CRISIS,
-    'RECOVERY':      CMAP_RECOV,
-}
 
-# Regime visual parameters — same camera elevations as other scripts
+REGIME_CMAPS = {
+    'BULL':      CMAP_BULL,
+    'NORMAL':    CMAP_NORMAL,
+    'CAUTIOUS':  CMAP_CAUTIOUS,
+    'CRISIS':    CMAP_CRISIS,
+    'RECOVERY':  CMAP_RECOV,
+}
+REGIME_COLORS = {
+    'BULL': GREEN, 'NORMAL': BLUE, 'CAUTIOUS': YELLOW,
+    'CRISIS': RED, 'RECOVERY': CYAN,
+}
 REGIME_ELEV = {
-    'BULL QUIET': 30, 'TRANSITION': 26, 'BEAR VOLATILE': 20, 'RECOVERY': 28,
+    'BULL': 30, 'NORMAL': 30, 'CAUTIOUS': 26, 'CRISIS': 20, 'RECOVERY': 28,
+}
+# MM parameters per regime
+REGIME_SPREAD = {
+    'BULL': 0.7, 'NORMAL': 1.0, 'CAUTIOUS': 2.0, 'CRISIS': 3.0, 'RECOVERY': 1.4,
+}
+REGIME_BASE = {
+    'BULL': 1.02, 'NORMAL': 1.00, 'CAUTIOUS': 0.90, 'CRISIS': 0.70, 'RECOVERY': 1.03,
 }
 
 OUT_DIR = Path(__file__).resolve().parent.parent / 'docs' / 'img'
@@ -68,10 +84,10 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 DPI = 150
 TOTAL_FRAMES = 120
-N_GRID = 80          # high-resolution grid
+N_GRID = 80
 
 # ---------------------------------------------------------------------------
-# 3D surface — same shapes as generate_visualizations.py / gen_regime_3d.py
+# 3D surfaces per regime
 # ---------------------------------------------------------------------------
 n_surf = N_GRID
 spot_surf = np.linspace(78, 122, n_surf)
@@ -80,37 +96,34 @@ X_SURF, Y_SURF = np.meshgrid(spot_surf, ivol_surf)
 
 
 def _bull_surface(X, Y, fi):
-    """Smooth elevated dome — same as regime_cycle_3d / regime_phases."""
     return 28 - 0.014 * (X - 100)**2 - 0.006 * (Y - 16)**2
 
+def _normal_surface(X, Y, fi):
+    return 22 - 0.012 * (X - 100)**2 - 0.005 * (Y - 20)**2
 
-def _transition_surface(X, Y, fi):
-    """Rippling surface with sine·cos waves."""
+def _cautious_surface(X, Y, fi):
     base = 10 - 0.010 * (X - 100)**2 - 0.005 * (Y - 28)**2
     waves = 6 * np.sin(0.4 * X + fi * 0.08) * np.cos(0.3 * Y + fi * 0.06)
     return base + waves
 
-
 def _crisis_surface(X, Y, fi):
-    """Inverted crater with turbulence."""
     crater = -10 * np.exp(-0.015 * ((X - 88)**2 + (Y - 52)**2))
     turb = (np.sin(X / 30 + fi * 0.12) * np.cos(Y / 8 + fi * 0.1)
             + 0.5 * np.sin(X / 15 + fi * 0.15) * np.cos(Y / 5 + fi * 0.12))
     return -22 + 0.007 * (X - 92)**2 + 0.004 * (Y - 50)**2 + crater + turb * 3
 
-
 def _recovery_surface(X, Y, fi):
-    """Reforming upward slope."""
     base = 16 - 0.008 * (X - 100)**2 - 0.005 * (Y - 30)**2
     turb = np.sin(X / 35 + fi * 0.06) * np.cos(Y / 6 + fi * 0.04)
     return base + turb * 1.0
 
 
 REGIME_SURFACES = {
-    'BULL QUIET':    _bull_surface,
-    'TRANSITION':    _transition_surface,
-    'BEAR VOLATILE': _crisis_surface,
-    'RECOVERY':      _recovery_surface,
+    'BULL':      _bull_surface,
+    'NORMAL':    _normal_surface,
+    'CAUTIOUS':  _cautious_surface,
+    'CRISIS':    _crisis_surface,
+    'RECOVERY':  _recovery_surface,
 }
 
 
@@ -120,27 +133,28 @@ def smoothstep(t):
 
 
 def blend_cmap(cmap_a, cmap_b, bt, z_norm):
-    """Blend two colormaps pixel-by-pixel — same as other scripts."""
     return cmap_a(z_norm) * (1 - bt) + cmap_b(z_norm) * bt
 
 
-def compute_regime(returns_window):
-    """Simple regime classification from returns."""
-    if len(returns_window) < 5:
-        return 'BULL QUIET', GREEN
-    mu = np.mean(returns_window)
-    sigma = np.std(returns_window)
+def classify_regime(returns, idx, lookback=20):
+    """Classify regime — same logic as rolling_backtest.py."""
+    if idx < 40:
+        return 'NORMAL'
+    w = returns[max(0, idx - lookback):idx]
+    vol = np.std(w, ddof=1) * np.sqrt(252) if len(w) > 2 else 0.10
+    mom = np.sum(w)
+    w_prev = returns[max(0, idx - 2 * lookback):max(0, idx - lookback)]
+    vol_prev = np.std(w_prev, ddof=1) * np.sqrt(252) if len(w_prev) > 2 else vol
 
-    if sigma > 0.018 and mu < -0.001:
-        return 'BEAR VOLATILE', RED
-    elif sigma > 0.012 and mu < 0:
-        return 'TRANSITION', YELLOW
-    elif mu > 0.0005 and sigma < 0.01:
-        return 'BULL QUIET', GREEN
-    elif mu > 0:
-        return 'RECOVERY', CYAN
-    else:
-        return 'TRANSITION', YELLOW
+    if vol > 0.32 and mom < -0.06:
+        return 'CRISIS'
+    if vol > 0.22 and mom < 0:
+        return 'CAUTIOUS'
+    if vol_prev > 0.27 and vol < vol_prev * 0.85 and mom > 0:
+        return 'RECOVERY'
+    if vol < 0.12 and mom > 0.01:
+        return 'BULL'
+    return 'NORMAL'
 
 
 # ---------------------------------------------------------------------------
@@ -167,13 +181,10 @@ def save_gif(frames, path, duration=220):
 
 
 def filter_market_gaps(prices, dates, tf_key):
-    """Remove overnight/weekend gaps for hourly and minute data."""
     if tf_key == 'daily':
         return prices, dates
-
     from datetime import timedelta
     max_gap = timedelta(hours=2) if tf_key == 'hourly' else timedelta(minutes=5)
-
     continuous_dates = [dates[0]]
     step = timedelta(hours=1) if tf_key == 'hourly' else timedelta(minutes=1)
     for i in range(1, len(dates)):
@@ -182,45 +193,56 @@ def filter_market_gaps(prices, dates, tf_key):
             continuous_dates.append(continuous_dates[-1] + step)
         else:
             continuous_dates.append(continuous_dates[-1] + gap)
-
     return prices, np.array(continuous_dates)
 
 
+# ---------------------------------------------------------------------------
+# Market-maker strategy simulation on real data
+# ---------------------------------------------------------------------------
+def simulate_mm_strategy(prices, returns):
+    """Simulate market-maker overlay on real price data.
+    Base ~100% long + spread capture from limit orders, regime-adjusted."""
+    N = len(prices)
+    port_value = np.ones(N) * prices[0]
+    regimes = ['NORMAL'] * N
+    spreads = np.ones(N)
+    bases = np.ones(N)
+    fills_per_day = np.zeros(N)
+
+    for i in range(1, N):
+        regime = classify_regime(returns, i)
+        regimes[i] = regime
+        spread_mult = REGIME_SPREAD[regime]
+        base = REGIME_BASE[regime]
+        spreads[i] = spread_mult
+        bases[i] = base
+
+        # Base position return
+        base_pnl = base * returns[i]
+
+        # Spread capture (simplified: proportional to daily range proxy)
+        daily_vol = abs(returns[i])
+        spread_capture = daily_vol * 0.15 * (1.0 / spread_mult)  # tighter = more fills
+        fills_per_day[i] = max(5, 40 * (1.0 / spread_mult))
+
+        port_value[i] = port_value[i - 1] * (1 + base_pnl + spread_capture)
+
+    return port_value, regimes, spreads, bases, fills_per_day
+
+
 def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label):
-    """Generate a combined dashboard GIF from real price data."""
     print(f'\nGenerating combined_dashboard_{tf_key}.gif  ({timeframe_label}) ...')
 
     prices, dates = filter_market_gaps(prices, dates, tf_key)
     N = len(prices)
+    returns = np.zeros(N)
+    returns[1:] = np.diff(prices) / prices[:-1]
 
-    # Compute returns
-    returns = np.diff(prices) / prices[:-1]
-    returns = np.concatenate([[0], returns])
-
-    # S&P 500 = buy & hold cumulative
+    # S&P 500 buy & hold
     sp_cum = (prices / prices[0] - 1) * 100
 
-    # Strategy: reduce exposure when rolling vol is high
-    lookback = max(20, N // 30)
-    port_value = np.ones(N) * prices[0]
-    exposure = np.ones(N)
-    for i in range(1, N):
-        window = returns[max(0, i - lookback):i]
-        vol = np.std(window) if len(window) > 2 else 0.005
-        mean_r = np.mean(window) if len(window) > 2 else 0
-
-        if vol > 0.015 and mean_r < -0.001:
-            exp = 0.15
-        elif vol > 0.01:
-            exp = 0.4
-        elif mean_r > 0.0005:
-            exp = 1.1
-        else:
-            exp = 0.8
-
-        exposure[i] = exp
-        port_value[i] = port_value[i - 1] * (1 + returns[i] * exp)
-
+    # Market-maker strategy
+    port_value, regimes, spreads, bases, fills = simulate_mm_strategy(prices, returns)
     port_cum = (port_value / port_value[0] - 1) * 100
 
     # Drawdowns
@@ -229,18 +251,12 @@ def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label
     port_peak = np.maximum.accumulate(port_value)
     port_dd = (port_peak - port_value) / port_peak * 100
 
-    # Pre-compute all regimes per bar (so we can blend between transitions)
-    regimes = []
-    for i in range(N):
-        w = returns[max(0, i - lookback):i]
-        regimes.append(compute_regime(w))
-
     # Frame indices
     bar_indices = np.linspace(max(30, N // 20), N - 1, TOTAL_FRAMES, dtype=int)
 
-    # Track previous regime for smooth blending
-    prev_regime = regimes[bar_indices[0]][0]
-    blend_t = 1.0  # 1.0 = fully in current regime
+    prev_regime = regimes[bar_indices[0]]
+    blend_t = 1.0
+    from_regime = prev_regime
 
     frames = []
     for fi, d in enumerate(bar_indices):
@@ -253,44 +269,43 @@ def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label
         ax_title = fig.add_subplot(gs_outer[0])
         ax_title.set_facecolor(BG); ax_title.axis('off')
 
-        regime_name, regime_color = regimes[d]
+        regime_name = regimes[d]
+        regime_color = REGIME_COLORS[regime_name]
         cur_price = prices[d]
-        cur_date = dates[d]
         alpha_pct = port_cum[d] - sp_cum[d]
 
-        # Smooth regime blending
         if regime_name != prev_regime:
             blend_t = 0.0
             from_regime = prev_regime
             prev_regime = regime_name
         else:
             from_regime = regime_name
-
         blend_t = min(1.0, blend_t + 0.08)
         bt = smoothstep(blend_t)
 
         ax_title.text(0.5, 0.7,
                       f'\u25cf LIVE  |  Regime: {regime_name}  |  '
-                      f'Exposure: {exposure[d]*100:.0f}%',
-                      color=regime_color, fontsize=16, fontweight='bold',
+                      f'Spread: {spreads[d]:.1f}x  |  Base: {bases[d]*100:.0f}%  |  '
+                      f'Fills/d: {fills[d]:.0f}',
+                      color=regime_color, fontsize=14, fontweight='bold',
                       ha='center', va='center', transform=ax_title.transAxes,
                       family='monospace')
         ax_title.text(0.5, 0.15,
-                      f'\u25cf LIVE  {timeframe_label}  |  '
-                      f'{cur_date}  |  S&P 500: ${cur_price:,.0f}  |  '
+                      f'{timeframe_label}  |  '
+                      f'S&P 500: ${cur_price:,.0f}  |  '
                       f'Strategy: {port_cum[d]:+.1f}%  |  '
-                      f'Buy&Hold: {sp_cum[d]:+.1f}%  |  '
+                      f'Benchmark: {sp_cum[d]:+.1f}%  |  '
                       f'Alpha: {alpha_pct:+.1f}%',
                       color=TEXT, fontsize=10, ha='center', va='center',
                       transform=ax_title.transAxes, family='monospace')
 
-        # --- Layout: chart left, 3D right ---
+        # --- Layout ---
         gs_bottom = gridspec.GridSpecFromSubplotSpec(
             1, 2, subplot_spec=gs_outer[1], width_ratios=[1.1, 1], wspace=0.06)
         gs_left = gridspec.GridSpecFromSubplotSpec(
             2, 1, subplot_spec=gs_bottom[0], height_ratios=[3, 1.2], hspace=0.25)
 
-        # ===== LEFT: Performance chart with real dates =====
+        # ===== LEFT: Performance chart =====
         ax_r = fig.add_subplot(gs_left[0])
         ax_r.set_facecolor(BG2)
         ax_r.grid(True, color=GRID_C, alpha=0.4, linewidth=0.5)
@@ -303,7 +318,7 @@ def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label
         ax_r.plot(date_arr, sp_cum[:d + 1], color=BLUE, linewidth=1.8,
                   alpha=0.8, label='S&P 500 (Buy & Hold)')
         ax_r.plot(date_arr, port_cum[:d + 1], color=WHITE, linewidth=2.2,
-                  alpha=0.95, label='Strategy (Regime)')
+                  alpha=0.95, label='MM Strategy (Base+Overlay)')
         ax_r.fill_between(date_arr, sp_cum[:d + 1], port_cum[:d + 1],
                           where=port_cum[:d + 1] > sp_cum[:d + 1],
                           color=GREEN, alpha=0.08)
@@ -335,7 +350,7 @@ def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label
         ax_dd.fill_between(date_arr, -sp_dd[:d + 1], color=BLUE, alpha=0.2,
                            label='S&P 500')
         ax_dd.fill_between(date_arr, -port_dd[:d + 1], color=WHITE, alpha=0.15,
-                           label='Strategy')
+                           label='MM Strategy')
         ax_dd.plot(date_arr, -sp_dd[:d + 1], color=BLUE, linewidth=0.8, alpha=0.6)
         ax_dd.plot(date_arr, -port_dd[:d + 1], color=WHITE, linewidth=1.2)
         ax_dd.axhline(0, color=DIM, linewidth=0.3)
@@ -346,7 +361,7 @@ def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label
         ax_dd.xaxis.set_major_locator(AutoDateLocator(minticks=3, maxticks=8))
         plt.setp(ax_dd.xaxis.get_majorticklabels(), rotation=30, ha='right')
 
-        # ===== RIGHT: 3D Surface — same style as all other scripts =====
+        # ===== RIGHT: 3D Surface =====
         ax3d = fig.add_subplot(gs_bottom[1], projection='3d')
         ax3d.set_facecolor(BG)
         ax3d.xaxis.pane.fill = False
@@ -358,19 +373,16 @@ def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label
         ax3d.grid(True, color='#223344', alpha=0.2)
         ax3d.tick_params(colors='#556677', labelsize=5)
 
-        # Build surface using same regime shapes as other scripts
         surf_fn_to = REGIME_SURFACES[regime_name]
         surf_fn_from = REGIME_SURFACES.get(from_regime, surf_fn_to)
         Z_from = surf_fn_from(X_SURF, Y_SURF, fi)
         Z_to = surf_fn_to(X_SURF, Y_SURF, fi)
         Z = Z_from * (1 - bt) + Z_to * bt
 
-        # Normalize for colormap
         z_min, z_max = Z.min(), Z.max()
         z_range = z_max - z_min if z_max > z_min else 1.0
         z_norm = (Z - z_min) / z_range
 
-        # Blend per-regime colormaps — same as regime_cycle_3d
         cmap_to = REGIME_CMAPS[regime_name]
         cmap_from = REGIME_CMAPS.get(from_regime, cmap_to)
         face_colors = blend_cmap(cmap_from, cmap_to, bt, z_norm)
@@ -379,11 +391,9 @@ def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label
                           alpha=0.93, rstride=1, cstride=1,
                           edgecolor='none', antialiased=True, shade=True)
 
-        # Wireframe overlay — same as other scripts
         ax3d.plot_wireframe(X_SURF[::4, ::4], Y_SURF[::4, ::4], Z[::4, ::4],
                             color='white', alpha=0.05, linewidth=0.3)
 
-        # Floor contour — same as other scripts
         z_floor = z_min - z_range * 0.15
         try:
             ax3d.contour(X_SURF, Y_SURF, Z,
@@ -394,20 +404,17 @@ def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label
             pass
 
         ax3d.set_zlim(z_floor, z_max + z_range * 0.1)
-
-        # Axis labels — SAME as all other scripts
         ax3d.set_xlabel('Spot Price ($)', color='#667788', fontsize=7, labelpad=6)
         ax3d.set_ylabel('Implied Vol (%)', color='#667788', fontsize=7, labelpad=6)
         ax3d.set_zlabel('P&L ($)', color='#667788', fontsize=7, labelpad=6)
 
-        # Camera — same elevations as other scripts
         elev = REGIME_ELEV.get(from_regime, 30) * (1 - bt) + \
                REGIME_ELEV.get(regime_name, 30) * bt
         azim = 215 + fi * 1.2
         ax3d.view_init(elev=elev, azim=azim)
 
         ax3d.set_title(
-            f'Regime: {regime_name}',
+            f'Regime: {regime_name}  |  Spread: {spreads[d]:.1f}x',
             color=regime_color, fontsize=10, fontweight='bold',
             fontfamily='monospace', pad=6)
 
@@ -425,7 +432,6 @@ def generate_dashboard(tf_key, prices, dates, timeframe_label, date_fmt, x_label
 if __name__ == '__main__':
     print(f'Output: {OUT_DIR}')
 
-    # --- Daily (~3 years) ---
     print('\nFetching S&P 500 daily data ...')
     sp_daily = yf.download('^GSPC', period='3y', interval='1d', progress=False)
     prices_d = sp_daily['Close'].values.flatten()
@@ -435,7 +441,6 @@ if __name__ == '__main__':
     generate_dashboard('daily', prices_d, dates_d,
                        '~3 Years (Daily)', '%Y-%m', 'Date')
 
-    # --- Hourly (~60 days) ---
     print('\nFetching S&P 500 hourly data ...')
     sp_hourly = yf.download('^GSPC', period='60d', interval='1h', progress=False)
     prices_h = sp_hourly['Close'].values.flatten()
@@ -445,7 +450,6 @@ if __name__ == '__main__':
     generate_dashboard('hourly', prices_h, dates_h,
                        '~60 Days (Hourly)', '%m-%d %H:%M', 'Date/Time')
 
-    # --- Minute (~5 days) ---
     print('\nFetching S&P 500 minute data ...')
     sp_minute = yf.download('^GSPC', period='5d', interval='1m', progress=False)
     prices_m = sp_minute['Close'].values.flatten()

@@ -32,17 +32,17 @@ The engine computes a **P&L surface in 3 dimensions** (Spot Price x Implied Vola
 
 ---
 
-### Early Warning Dashboard with Execution Engine
+### Early Warning Dashboard with MM Engine
 
-The multi-panel dashboard tracks crisis probability, VIX trajectory from the live feed, market-maker spread adjustments, and cumulative returns vs. S&P 500 benchmark. The system **detects the incoming crash early** and the market-maker engine automatically widens spreads and trims the base position before the drawdown hits.
+The multi-panel dashboard tracks 20-day rolling volatility, spread multiplier trajectory, MM engine parameters, and cumulative returns vs. S&P 500 benchmark. The system **detects the incoming crash early** and the market-maker engine automatically widens spreads and trims the base position before the drawdown hits.
 
 ![Early Warning Dashboard Animation](docs/img/early_warning_dashboard.gif)
 
 **Panels:**
-- **Top-Left**: Crisis probability gauge -- rises from 5% to 89% as crash approaches
-- **Top-Right**: VIX trajectory from live data feed -- climbing from 12 past the danger threshold to 67
-- **Bottom-Left**: Market-maker regime response -- spread widening, base position trimming, overlay size reduction as risk rises
-- **Bottom-Right**: Live cumulative returns -- portfolio (green) captures spread alpha vs. S&P 500 (red)
+- **Top-Left**: 20d rolling volatility gauge -- rises from 10% past 22% (cautious) and 32% (crisis) thresholds
+- **Top-Right**: Spread multiplier trajectory -- climbs from 0.7x to 3.0x as volatility spikes
+- **Bottom-Left**: MM Engine Parameters -- spread multiplier, base position %, fills/day bars updated per regime
+- **Bottom-Right**: Live cumulative returns -- MM Strategy (green) captures spread alpha vs. S&P 500 (red)
 
 ---
 
@@ -144,10 +144,11 @@ The animated chart shows the engine's portfolio (green) vs. the S&P 500 benchmar
 ![Performance vs S&P 500 Animation](docs/img/performance_vs_sp500.gif)
 
 **Key observations:**
-- **Day 180-240 (Cautious)**: HMM detects regime shift → spreads widen to 2.0x, base trims 10-20%
-- **Day 240-340 (Crisis)**: Very wide spreads (3.0x) capture max spread per fill, base trimmed 20-40%
-- **Day 340-460 (Recovery)**: Spreads tighten, base overweights to 103%, capturing the V-shaped recovery
-- **Day 460+ (Bull)**: Tight spreads (0.7x) maximise fill rate, base at 102%, alpha compounds
+- **Day 0-150 (Bull)**: Tight spreads (0.7x) maximise fill rate, base at 102%, alpha compounds
+- **Day 150-260 (Normal)**: Standard spreads (1.0x), neutral base 100%, steady overlay capture
+- **Day 260-340 (Cautious)**: HMM detects regime shift → spreads widen to 2.0x, base trims to 90%
+- **Day 340-460 (Crisis)**: Very wide spreads (3.0x) capture max spread per fill, base trimmed to 70%
+- **Day 460+ (Recovery)**: Spreads tighten to 1.4x, base overweights to 103%, capturing the V-shaped recovery
 - **Stats panel**: Live Sharpe, Sortino, Calmar ratios + return, max drawdown, alpha, fill count
 - **Lower panel**: Drawdown comparison — strategy stays ~100% invested, alpha from spread capture
 
