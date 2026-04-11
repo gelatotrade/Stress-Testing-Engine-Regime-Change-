@@ -2,7 +2,10 @@
 """
 Generate animated GIFs showing LIVE mode operation:
   1. regime_phases_comparison.gif  - 3D surface morphing through live regime detection
-  2. performance_vs_sp500.gif     - Live portfolio vs S&P 500 with execution engine trades
+  2. performance_vs_sp500.gif     - Live MM portfolio vs S&P 500 with regime-adjusted overlay
+
+Strategy: ~100% base long + multi-level limit-order overlay.
+Regimes: BULL, NORMAL, CAUTIOUS, CRISIS, RECOVERY.
 """
 
 import matplotlib
@@ -11,7 +14,6 @@ matplotlib.use('Agg')
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, Normalize
-from matplotlib.patches import FancyBboxPatch
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 import matplotlib.gridspec as gridspec
 import io
@@ -36,21 +38,27 @@ DIM      = '#444466'
 
 PNL_CMAP = LinearSegmentedColormap.from_list('pnl', [RED, '#ff6600', YELLOW, GREEN, CYAN])
 
-# Diverging per-regime colormaps (valleys = different hue from peaks)
+# 5-regime colormaps
 CMAP_BULL = LinearSegmentedColormap.from_list('bull', [
     '#0000aa', '#0055cc', '#22aa66', '#00ff88', '#eeffaa', '#ffffdd'])
-CMAP_TRANS = LinearSegmentedColormap.from_list('trans', [
+CMAP_NORMAL = LinearSegmentedColormap.from_list('normal', [
+    '#001144', '#003388', '#2266aa', '#44aacc', '#88ddee', '#ccffff'])
+CMAP_CAUTIOUS = LinearSegmentedColormap.from_list('cautious', [
     '#440066', '#8833aa', '#cc7700', '#ffaa00', '#ffdd44', '#ffffcc'])
 CMAP_CRISIS = LinearSegmentedColormap.from_list('crisis', [
     '#000044', '#220066', '#660088', '#cc0022', '#ff4444', '#ffcc44'])
 CMAP_RECOV = LinearSegmentedColormap.from_list('recov', [
     '#330044', '#553388', '#0066aa', '#00ccee', '#66ffcc', '#eeffee'])
-REGIME_CMAPS = [CMAP_BULL, CMAP_TRANS, CMAP_CRISIS, CMAP_RECOV, CMAP_BULL]
+REGIME_CMAPS = [CMAP_BULL, CMAP_NORMAL, CMAP_CAUTIOUS, CMAP_CRISIS, CMAP_RECOV]
+
+# MM parameters per regime
+REGIME_SPREAD = {'BULL': 0.7, 'NORMAL': 1.0, 'CAUTIOUS': 2.0, 'CRISIS': 3.0, 'RECOVERY': 1.4}
+REGIME_BASE   = {'BULL': 1.02, 'NORMAL': 1.00, 'CAUTIOUS': 0.90, 'CRISIS': 0.70, 'RECOVERY': 1.03}
 
 OUT_DIR = Path(__file__).resolve().parent.parent / 'docs' / 'img'
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-DPI = 150        # was 100
+DPI = 150
 FRAME_MS = 150
 
 
@@ -75,7 +83,7 @@ def save_gif(frames, path, duration=FRAME_MS):
 
 
 # ===================================================================
-# 1. Regime Phases Comparison (Live Mode - 3D surface with execution)
+# 1. Regime Phases Comparison (Live Mode - 3D surface with MM overlay)
 # ===================================================================
 def generate_regime_phases():
     print('Generating regime_phases_comparison.gif ...')
@@ -85,47 +93,47 @@ def generate_regime_phases():
     X, Y = np.meshgrid(spot, ivol)
 
     # Regime keyframe surfaces
-    def bull_quiet(X, Y):
+    def bull_surface(X, Y):
         return 28 - 0.014*(X-100)**2 - 0.006*(Y-16)**2
 
-    def transition_surf(X, Y):
+    def normal_surface(X, Y):
+        return 22 - 0.012*(X-100)**2 - 0.005*(Y-20)**2
+
+    def cautious_surface(X, Y):
         base = 10 - 0.010*(X-100)**2 - 0.005*(Y-28)**2
         waves = 6 * np.sin(0.4*X) * np.cos(0.3*Y)
         return base + waves
 
-    def crisis(X, Y):
+    def crisis_surface(X, Y):
         crater = -10 * np.exp(-0.015*((X-88)**2 + (Y-52)**2))
         return -22 + 0.007*(X-92)**2 + 0.004*(Y-50)**2 + crater
 
-    def recovery(X, Y):
+    def recovery_surface(X, Y):
         return 16 - 0.008*(X-100)**2 - 0.005*(Y-30)**2
 
-    def new_bull(X, Y):
-        return 26 - 0.013*(X-102)**2 - 0.006*(Y-15)**2
+    surfaces = [bull_surface, normal_surface, cautious_surface, crisis_surface, recovery_surface]
 
-    surfaces = [bull_quiet, transition_surf, crisis, recovery, new_bull]
-
-    phase_names  = ['BULL QUIET', 'TRANSITION', 'BEAR VOLATILE', 'RECOVERY', 'NEW BULL']
-    phase_colors = [GREEN, YELLOW, RED, CYAN, GREEN]
+    phase_names  = ['BULL', 'NORMAL', 'CAUTIOUS', 'CRISIS', 'RECOVERY']
+    phase_colors = [GREEN, BLUE, YELLOW, RED, CYAN]
     phase_infos  = [
-        'LIVE | SP500: $5,280 | VIX 12 | Signal: STRONG BUY\n'
-        '[Exec] BUY 892 SPY @ $528.04 | Account: $1,000,000',
-        'LIVE | SP500: $5,050 | VIX 24 | Signal: REDUCE RISK\n'
-        '[Exec] SELL 446 SPY @ $505.12 | Account: $987,420',
-        'LIVE | SP500: $3,900 | VIX 67 | Signal: CRISIS\n'
-        '[Exec] SELL 357 SPY @ $391.88 | Account: $932,180',
-        'LIVE | SP500: $4,500 | VIX 28 | Signal: BUY\n'
-        '[Exec] BUY 663 SPY @ $450.22 | Account: $961,540',
-        'LIVE | SP500: $5,600 | VIX 14 | Signal: STRONG BUY\n'
-        '[Exec] BUY 224 SPY @ $560.15 | Account: $1,148,920',
+        'LIVE | Spread: 0.7x | Base: 102% | Fills: 57/bar\n'
+        'MM Engine: Tight spreads, full base + overlay capture',
+        'LIVE | Spread: 1.0x | Base: 100% | Fills: 40/bar\n'
+        'MM Engine: Standard spreads, neutral base position',
+        'LIVE | Spread: 2.0x | Base: 90% | Fills: 20/bar\n'
+        'MM Engine: Wide spreads, reduced base, cautious overlay',
+        'LIVE | Spread: 3.0x | Base: 70% | Fills: 13/bar\n'
+        'MM Engine: Maximum spreads, trimmed base, crisis mode',
+        'LIVE | Spread: 1.4x | Base: 103% | Fills: 29/bar\n'
+        'MM Engine: Tightening spreads, recovery accumulation',
     ]
-    elevations = [30, 26, 20, 28, 30]
+    elevations = [30, 30, 26, 20, 28]
     n_phases = len(surfaces)
 
-    tl_colors = [GREEN, YELLOW, RED, CYAN, GREEN]
-    tl_labels = ['Bull', 'Trans', 'Crisis', 'Recov', 'New Bull']
+    tl_colors = [GREEN, BLUE, YELLOW, RED, CYAN]
+    tl_labels = ['Bull', 'Normal', 'Cautious', 'Crisis', 'Recovery']
 
-    total = 120  # continuous frames, no static/transition split
+    total = 120
 
     def smoothstep(t):
         t = max(0.0, min(1.0, t))
@@ -136,18 +144,16 @@ def generate_regime_phases():
 
     frames = []
     for fi in range(total):
-        # Continuous parameter across all regimes
-        t = fi / (total - 1) * (n_phases - 1)  # 0..4
+        t = fi / (total - 1) * (n_phases - 1)
         ri_a = min(int(t), n_phases - 2)
         ri_b = ri_a + 1
-        local_t = t - ri_a  # 0..1
+        local_t = t - ri_a
         bt = smoothstep(local_t)
 
         Z_a = surfaces[ri_a](X, Y)
         Z_b = surfaces[ri_b](X, Y)
         Z = Z_a * (1 - bt) + Z_b * bt
 
-        # Display info
         if bt < 0.15:
             name = phase_names[ri_a]
             color = phase_colors[ri_a]
@@ -171,7 +177,7 @@ def generate_regime_phases():
         ax_title = fig.add_subplot(gs[0])
         ax_title.set_facecolor(BG); ax_title.axis('off')
         ax_title.text(0.5, 0.5,
-                      f'\u25cf LIVE MODE  //  Regime: {name}  //  Execution Engine Active',
+                      f'\u25cf LIVE MODE  //  Regime: {name}  //  MM Engine Active',
                       color=color, fontsize=18, fontweight='bold',
                       ha='center', va='center', transform=ax_title.transAxes,
                       family='monospace')
@@ -189,7 +195,6 @@ def generate_regime_phases():
         ax3d.grid(True, color='#223344', alpha=0.2)
         ax3d.tick_params(colors='#556677', labelsize=7)
 
-        # Continuous colormap blend
         z_min, z_max = Z.min(), Z.max()
         z_range = z_max - z_min if z_max > z_min else 1.0
         z_norm_arr = (Z - z_min) / z_range
@@ -256,7 +261,7 @@ def generate_regime_phases():
 
 
 # ===================================================================
-# 2. Live Performance vs S&P 500 with Execution Engine Trades
+# 2. Live Performance vs S&P 500 with Market-Maker Overlay
 # ===================================================================
 def generate_performance_chart():
     print('Generating performance_vs_sp500.gif ...')
@@ -265,11 +270,11 @@ def generate_performance_chart():
     days = 756
 
     # Regime schedule (trading days)
-    regime_bounds = [0, 180, 240, 340, 460, days]
-    regime_names  = ['Bull Quiet', 'Transition', 'Bear Volatile', 'Recovery', 'New Bull']
-    regime_colors = [GREEN, YELLOW, RED, CYAN, GREEN]
-    regime_drifts = [0.0005, -0.0002, -0.0028, 0.0015, 0.0006]
-    regime_vols   = [0.008, 0.014, 0.032, 0.016, 0.009]
+    regime_bounds = [0, 150, 260, 340, 460, days]
+    regime_names  = ['BULL', 'NORMAL', 'CAUTIOUS', 'CRISIS', 'RECOVERY']
+    regime_colors = [GREEN, BLUE, YELLOW, RED, CYAN]
+    regime_drifts = [0.0005, 0.0002, -0.0002, -0.0028, 0.0015]
+    regime_vols   = [0.008, 0.010, 0.014, 0.032, 0.016]
 
     # S&P 500 daily returns per regime
     sp_ret = np.zeros(days)
@@ -279,12 +284,24 @@ def generate_performance_chart():
 
     sp_cum = np.cumprod(1 + sp_ret) - 1
 
-    # Engine portfolio: execution engine hedges during transition/crisis
-    port_ret = sp_ret.copy()
-    port_ret[180:240] = sp_ret[180:240] * 0.4 + 0.0003
-    port_ret[240:340] = sp_ret[240:340] * 0.18 + 0.0005
-    port_ret[340:460] = sp_ret[340:460] * 1.3 + 0.0003
-    port_ret[460:] = sp_ret[460:] * 1.1 + 0.0002
+    # MM portfolio: base position + spread capture, regime-adjusted
+    port_ret = np.zeros(days)
+    spread_arr = np.ones(days)
+    base_arr = np.ones(days)
+    fills_arr = np.zeros(days)
+    for i in range(len(regime_names)):
+        a, b = regime_bounds[i], regime_bounds[i+1]
+        rn = regime_names[i]
+        base_pct = REGIME_BASE[rn]
+        spread_m = REGIME_SPREAD[rn]
+        spread_arr[a:b] = spread_m
+        base_arr[a:b] = base_pct
+        fills_arr[a:b] = max(5, 40 * (1.0 / spread_m))
+        for d in range(a, b):
+            base_pnl = base_pct * sp_ret[d]
+            daily_vol = abs(sp_ret[d])
+            spread_capture = daily_vol * 0.15 * (1.0 / spread_m)
+            port_ret[d] = base_pnl + spread_capture
 
     port_cum = np.cumprod(1 + port_ret) - 1
 
@@ -321,16 +338,16 @@ def generate_performance_chart():
     port_sharpe = rolling_sharpe(port_ret)
     port_sortino = rolling_sortino(port_ret)
 
-    # Execution engine trades at regime boundaries
-    trade_days = [0, 180, 240, 340, 460]
+    # Regime transition markers (MM actions, not BUY/SELL)
+    trade_days = [0, 150, 260, 340, 460]
     trade_labels = [
-        'BUY 892 SPY',
-        'SELL 446 SPY',
-        'SELL 357 SPY\n(CRISIS hedge)',
-        'BUY 663 SPY\n(Recovery entry)',
-        'BUY 224 SPY',
+        'Spread: 0.7x\nBase: 102%',
+        'Spread: 1.0x\nBase: 100%',
+        'Spread: 2.0x\nBase: 90%',
+        'Spread: 3.0x\nBase: 70%',
+        'Spread: 1.4x\nBase: 103%',
     ]
-    trade_colors = [GREEN, RED, RED, GREEN, GREEN]
+    trade_colors = [GREEN, BLUE, YELLOW, RED, CYAN]
 
     total_frames = 60
     day_indices = np.linspace(5, days, total_frames, dtype=int)
@@ -359,11 +376,11 @@ def generate_performance_chart():
         sortino_now = port_sortino[min(d-1, len(port_sortino)-1)] if d > 0 else 0
 
         ax_t.text(0.5, 0.65,
-                  f'\u25cf LIVE  |  PORTFOLIO vs S&P 500  |  Day {d}/{days}  |  Regime: {rn}',
+                  f'\u25cf LIVE  |  MM Strategy vs S&P 500  |  Day {d}/{days}  |  Regime: {rn}',
                   color=rc, fontsize=15, fontweight='bold', ha='center', va='center',
                   transform=ax_t.transAxes, family='monospace')
         ax_t.text(0.5, 0.12,
-                  f'Portfolio: {port_ret_now:+.1f}%    S&P 500: {sp_ret_now:+.1f}%    '
+                  f'Strategy: {port_ret_now:+.1f}%    S&P 500: {sp_ret_now:+.1f}%    '
                   f'Alpha: {alpha_now:+.1f}%    Sharpe: {sharpe_now:.2f}    Sortino: {sortino_now:.2f}',
                   color=TEXT, fontsize=10, ha='center', va='center',
                   transform=ax_t.transAxes, family='monospace')
@@ -393,10 +410,10 @@ def generate_performance_chart():
         x = np.arange(d)
         ax_r.plot(x, sp_cum[:d]*100, color=RED, linewidth=1.8, alpha=0.7, label='S&P 500')
         ax_r.fill_between(x, 0, sp_cum[:d]*100, color=RED, alpha=0.04)
-        ax_r.plot(x, port_cum[:d]*100, color=GREEN, linewidth=2.8, label='Engine Portfolio')
+        ax_r.plot(x, port_cum[:d]*100, color=GREEN, linewidth=2.8, label='MM Strategy (Base+Overlay)')
         ax_r.fill_between(x, 0, port_cum[:d]*100, color=GREEN, alpha=0.08)
 
-        # Mark execution engine trades
+        # Mark regime transition points
         for ti, td in enumerate(trade_days):
             if td < d and td > 0:
                 ax_r.axvline(td, color=trade_colors[ti], linestyle='--', alpha=0.5, linewidth=1)
@@ -423,7 +440,7 @@ def generate_performance_chart():
                 calmar_now = ann_ret / mdd
 
         stats = [
-            ('PORTFOLIO', GREEN),
+            ('MM STRATEGY', GREEN),
             (f'Return: {port_ret_now:+.1f}%', GREEN),
             (f'MaxDD: {port_dd[:d].max()*100:.1f}%', YELLOW if port_dd[:d].max()<0.15 else RED),
             (f'Sharpe:  {sharpe_now:.2f}', BLUE),
@@ -436,14 +453,15 @@ def generate_performance_chart():
             ('', TEXT),
             (f'ALPHA: {alpha_now:+.1f}%', GREEN if alpha_now > 0 else RED),
             ('', TEXT),
-            ('EXECUTION', CYAN),
-            (f'Trades: {sum(1 for td in trade_days if td < d)}', CYAN),
-            ('Mode: Paper', DIM),
+            ('MM PARAMS', CYAN),
+            (f'Spread: {spread_arr[min(d-1,days-1)]:.1f}x', CYAN),
+            (f'Base:   {base_arr[min(d-1,days-1)]*100:.0f}%', CYAN),
+            (f'Fills:  {fills_arr[min(d-1,days-1)]:.0f}/d', CYAN),
         ]
 
         header_idx = {0, 7, 11, 13}
         for si, (txt, col) in enumerate(stats):
-            y = 0.97 - si * 0.062
+            y = 0.97 - si * 0.058
             fs = 11 if si in header_idx else 9
             fw = 'bold' if si in header_idx else 'normal'
             ax_s.text(0.1, y, txt, color=col, fontsize=fs, fontweight=fw,
@@ -462,35 +480,35 @@ def generate_performance_chart():
         ax_dd.set_ylim(-max(sp_dd.max(), port_dd.max())*130, 2)
 
         ax_dd.fill_between(x, -sp_dd[:d]*100, color=RED, alpha=0.3, label='S&P 500 DD')
-        ax_dd.fill_between(x, -port_dd[:d]*100, color=GREEN, alpha=0.3, label='Portfolio DD')
+        ax_dd.fill_between(x, -port_dd[:d]*100, color=GREEN, alpha=0.3, label='MM Strategy DD')
         ax_dd.plot(x, -sp_dd[:d]*100, color=RED, linewidth=1, alpha=0.6)
         ax_dd.plot(x, -port_dd[:d]*100, color=GREEN, linewidth=1.5)
         ax_dd.axhline(0, color=DIM, linewidth=0.5)
         ax_dd.legend(fontsize=7, loc='lower left', facecolor=BG2,
                      edgecolor=GRID_C, labelcolor=TEXT)
 
-        # --- Allocation bar ---
+        # --- MM Parameters panel (replaces old allocation bar) ---
         ax_al = fig.add_subplot(gs[2, 1])
         ax_al.set_facecolor(BG2); ax_al.axis('off')
         ax_al.set_xlim(0, 1); ax_al.set_ylim(0, 1)
 
-        alloc_map = {
-            0: (0.15, 0.60, 0.25),
-            1: (0.40, 0.40, 0.20),
-            2: (0.70, 0.20, 0.10),
-            3: (0.25, 0.50, 0.25),
-            4: (0.15, 0.60, 0.25),
-        }
-        cash, eq, opt = alloc_map[cur_regime]
+        cur_spread = spread_arr[min(d-1, days-1)]
+        cur_base = base_arr[min(d-1, days-1)]
+        cur_fills = fills_arr[min(d-1, days-1)]
 
-        ax_al.text(0.5, 0.95, 'ALLOCATION', color=TEXT, fontsize=10,
+        ax_al.text(0.5, 0.95, 'MM PARAMETERS', color=TEXT, fontsize=10,
                    fontweight='bold', ha='center', va='top',
                    transform=ax_al.transAxes, family='monospace')
 
-        bar_data = [('Cash', cash, GREEN), ('Equity', eq, BLUE), ('Options', opt, CYAN)]
+        # Spread width bar (0.7 - 3.0 range, normalized)
+        bar_data = [
+            ('Spread', cur_spread / 3.0, YELLOW),
+            ('Base',   cur_base, GREEN),
+            ('Fills',  cur_fills / 60.0, CYAN),
+        ]
         for bi, (lbl, val, col) in enumerate(bar_data):
             y = 0.72 - bi * 0.28
-            ax_al.add_patch(plt.Rectangle((0.08, y-0.06), 0.84*val, 0.12,
+            ax_al.add_patch(plt.Rectangle((0.08, y-0.06), 0.84*min(val, 1.0), 0.12,
                                           facecolor=col, alpha=0.7,
                                           transform=ax_al.transAxes))
             ax_al.add_patch(plt.Rectangle((0.08, y-0.06), 0.84, 0.12,
@@ -498,7 +516,13 @@ def generate_performance_chart():
                                           linewidth=1, transform=ax_al.transAxes))
             ax_al.text(0.06, y, f'{lbl}', color=col, fontsize=8, ha='right',
                        va='center', transform=ax_al.transAxes, family='monospace')
-            ax_al.text(0.08 + 0.84*val + 0.02, y, f'{val:.0%}', color=col, fontsize=9,
+            if lbl == 'Spread':
+                display_val = f'{cur_spread:.1f}x'
+            elif lbl == 'Base':
+                display_val = f'{cur_base*100:.0f}%'
+            else:
+                display_val = f'{cur_fills:.0f}/d'
+            ax_al.text(0.08 + 0.84*min(val, 1.0) + 0.02, y, display_val, color=col, fontsize=9,
                        ha='left', va='center', transform=ax_al.transAxes,
                        family='monospace', fontweight='bold')
 
